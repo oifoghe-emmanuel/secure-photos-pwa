@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <base href="/secure-photos-pwa/">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#007AFF">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <title>SecurePhoto</title>
+  <link rel="stylesheet" href="./style.css?v=9.4.0">
+</head>
+<body>
+
+  <!-- AUTH SCREEN -->
+  <div id="auth-screen" class="screen active">
+    <div class="container">
+      <div class="lock">
+        <svg width="86px" height="86px" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1C1C1E"/>
+      <stop offset="100%" stop-color="#000000"/>
+    </linearGradient>
+    <linearGradient id="bodyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0A84FF"/>
+      <stop offset="100%" stop-color="#0040DD"/>
+    </linearGradient>
+    <linearGradient id="shackleGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4DA3FF"/>
+      <stop offset="100%" stop-color="#0062E6"/>
+    </linearGradient>
+    <radialGradient id="highlight" cx="30%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="110" fill="url(#bgGrad)"/>
+  <g filter="url(#shadow)">
+    <rect x="146" y="256" width="220" height="170" rx="28" fill="url(#bodyGrad)"/>
+    <rect x="146" y="256" width="220" height="170" rx="28" fill="url(#highlight)"/>
+  </g>
+  <path d="M186 256V206C186 167.34 217.34 136 256 136C294.66 136 326 167.34 326 206V256" 
+        stroke="url(#shackleGrad)" stroke-width="40" stroke-linecap="round" fill="none"/>
+  <path d="M186 256V206C186 167.34 217.34 136 256 136C294.66 136 326 167.34 326 206V256" 
+        stroke="#FFFFFF" stroke-width="40" stroke-linecap="round" stroke-opacity="0.15" fill="none"/>
+  <circle cx="256" cy="332" r="22" fill="#001F5C"/>
+  <circle cx="256" cy="332" r="16" fill="#FFFFFF"/>
+  <rect x="250" y="332" width="12" height="32" rx="6" fill="#FFFFFF"/>
+</svg>
+      </div>
+      <h1>SecurePhoto</h1>
+      <p class="subtitle">Military-grade photo vault v1.0</p>
+
+      <div id="signup-form">
+        <input type="email" id="email" placeholder="Email" class="input" autocomplete="email">
+        <input type="text" id="username" placeholder="Username" class="input" autocomplete="username">
+        <input type="password" id="password" placeholder="Master Password" class="input" autocomplete="new-password">
+        <div id="password-rules" class="rules">
+          <div class="rule" id="rule-length">• 8+ characters</div>
+          <div class="rule" id="rule-letter">• At least 1 letter</div>
+          <div class="rule" id="rule-number">• At least 1 number</div>
+          <div class="rule" id="rule-symbol">• At least 1 symbol</div>
+        </div>
+        <button class="btn-primary" id="signup-btn" disabled>Create Secure Account</button>
+        <p class="switch">Have account? <a id="show-login-link">Login</a></p>
+      </div>
+
+      <div id="login-form" style="display:none">
+        <input type="email" id="login-email" placeholder="Email" class="input" autocomplete="email">
+        <input type="password" id="login-password" placeholder="Master Password" class="input" autocomplete="current-password">
+        <button class="btn-primary" id="login-btn">Unlock with Password</button>
+        <button class="btn-faceid" id="faceid-btn" style="display:none">🔐 Unlock with Biometric</button>
+        <p id="bio-unavailable-note" class="hint" style="display:none;text-align:center;margin-top:8px;font-size:13px;opacity:0.7;">Biometric not available on this device</p>
+        <p class="switch">No account? <a id="show-signup-link">Sign Up</a></p>
+      </div>
+
+      <div id="auth-status" class="status"></div>
+    </div>
+  </div>
+
+  <!-- MAIN APP -->
+  <div id="app-screen" class="screen">
+    <div id="home-tab" class="tab active">
+      <div class="header">
+        <div>
+          <h2>SecurePhoto</h2>
+          <div id="header-username">@user</div>
+        </div>
+        <button class="btn-logout" id="logout-btn">Lock</button>
+      </div>
+      <div id="app-status" class="status"></div>
+      <div id="gallery" class="gallery-grid">
+        <div class="empty-state-home">
+          <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+            <polyline points="21 15 16 10 5 21"></polyline>
+          </svg>
+          <h3>No Photos Yet</h3>
+          <p>Press the + button to add your first encrypted photo</p>
+        </div>
+      </div>
+      <input type="file" id="camera" accept="image/*" capture="camera" hidden>
+      <button class="btn-primary fab" id="fab-btn">+</button>
+    </div>
+
+    <div id="move-tab" class="tab">
+      <div class="header">
+        <h2>Move to Vault</h2>
+      </div>
+      <div class="move-container">
+        <div class="move-icon">
+          <svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+        </div>
+        <h3>Import Photos Securely</h3>
+        <p class="move-desc">Select photos from your device to encrypt and store in your private vault</p>
+        <input type="file" id="move-input" accept="image/*" multiple hidden>
+        <button class="btn-primary move-btn" id="move-select-btn">Select Photos</button>
+        <div class="move-warning" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;">
+    <circle cx="12" cy="12" r="12" fill="none" />
+    <path d="M3.44722 18.1056L10.2111 4.57771C10.9482 3.10361 13.0518 3.10362 13.7889 4.57771L20.5528 18.1056C21.2177 19.4354 20.2507 21 18.7639 21H5.23607C3.7493 21 2.78231 19.4354 3.44722 18.1056Z" stroke="red" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M12 10L12 14" stroke="red" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    <circle cx="12" cy="17" r="1" fill="red" />
+  </svg>
+  <span>For security, delete originals from Gallery after import</span>
+</div>
+        <div id="move-status" class="status"></div>
+        <div id="move-preview"></div>
+      </div>
+    </div>
+
+    <div id="settings-tab" class="tab">
+      <div class="header">
+        <h2>Settings</h2>
+      </div>
+      <div class="settings-list">
+        <div class="setting-item">
+          <span>Theme</span>
+          <label class="toggle">
+            <input type="checkbox" id="theme-toggle">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="setting-item">
+          <span>Auth Method</span>
+          <select id="auth-method" class="select">
+            <option value="both">Password + Biometric</option>
+            <option value="password">Password Only</option>
+            <option value="biometric">Biometric Only</option>
+          </select>
+        </div>
+        <div class="setting-item">
+          <span>Cloud Sync</span>
+          <label class="toggle">
+            <input type="checkbox" id="sync-toggle" disabled>
+            <span class="slider"></span>
+          </label>
+          <p class="hint">Coming in v2.0</p>
+        </div>
+        <div class="setting-item" id="contact-item">
+          <span>Contact Us</span>
+          <span class="arrow">›</span>
+        </div>
+        <div id="contact-dropdown" class="dropdown" style="display:none">
+          <a href="https://x.com/OifogheEmmanuel" target="_blank">𝕏 Twitter</a>
+          <a href="mailto:oifogheemmanuel16@gmail.com" target="_blank">📧 Email</a>
+          <a href="https://github.com/Oifoghe-Emmanuel" target="_blank">💻 GitHub</a>
+          <a href="https://paystack.shop/pay/h9wvwzrcg3" id="sponsor-link" target="_blank">❤️ Sponsor</a>
+        </div>
+        <div class="setting-item" id="about-item">
+          <span>About</span>
+          <span class="arrow">›</span>
+        </div>
+        <div id="about-dropdown" class="dropdown about-dropdown" style="display:none">
+          <div class="about-content">
+            <h3>SecurePhoto v1.0</h3>
+            <p><strong>Mission:</strong> Protect your private memories with military-grade encryption.</p>
+            <p><strong>Features:</strong></p>
+            <ul>
+              <li>🔐 AES-256-GCM Encryption</li>
+              <li>👆 Biometric Lock</li>
+              <li>📱 100% Offline</li>
+              <li>🚫 Zero-Knowledge</li>
+            </ul>
+            <p><strong>Built by:</strong> Oifoghe Emmanuel, Delta State, Nigeria</p>
+            <p><strong>Goal:</strong> Protect millions of photos even when leaked.</p>
+          </div>
+        </div>
+        <div class="setting-item">
+          <span>Version</span>
+          <span class="version">v1.0.0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- BOTTOM NAV - SIBLING TO TABS, NOT NESTED -->
+    <div class="bottom-nav">
+      <button class="nav-item active" data-tab="home">
+        <span class="icon">
+          <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+        </span>
+        <span>Home</span>
+      </button>
+      <button class="nav-item" data-tab="move">
+        <span class="icon">
+           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+   <polyline points="7 10 12 15 17 10"></polyline>
+   <line x1="12" y1="15" x2="12" y2="3"></line>
+ </svg>
+        </span>
+        <span>Move</span>
+      </button>
+      <button class="nav-item" data-tab="settings">
+        <span class="icon">
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    <path d="M3.66 10.64C4.13 10.94 4.44 11.44 4.44 12C4.44 12.56 4.13 13.06 3.66 13.36C3.34 13.56 3.13 13.72 2.99 13.92C2.66 14.34 2.52 14.87 2.59 15.39C2.64 15.79 2.87 16.19 3.34 17C3.81 17.81 4.04 18.21 4.35 18.45C4.78 18.78 5.31 18.92 5.83 18.85C6.07 18.82 6.32 18.72 6.65 18.54C7.15 18.28 7.74 18.27 8.22 18.55C8.7 18.83 8.99 19.34 9.01 19.9C9.02 20.28 9.06 20.54 9.15 20.77C9.36 21.26 9.74 21.64 10.23 21.85C10.6 22 11.07 22 12 22C12.93 22 13.4 22 13.77 21.85C14.26 21.64 14.64 21.26 14.85 20.77C14.94 20.54 14.98 20.28 14.99 19.9C15.01 19.34 15.3 18.83 15.78 18.55C16.26 18.27 16.85 18.28 17.35 18.54C17.68 18.72 17.93 18.82 18.17 18.85C18.69 18.92 19.22 18.78 19.65 18.45C19.96 18.21 20.19 17.81 20.66 17C20.87 16.64 21.03 16.36 21.15 16.13M20.34 13.36C19.87 13.06 19.56 12.56 19.56 12C19.56 11.44 19.87 10.94 20.34 10.64C20.66 10.44 20.87 10.28 21.01 10.08C21.34 9.66 21.48 9.13 21.41 8.61C21.36 8.21 21.13 7.81 20.66 7C20.19 6.19 19.96 5.79 19.65 5.55C19.22 5.22 18.69 5.08 18.17 5.15C17.93 5.18 17.68 5.28 17.35 5.46C16.85 5.72 16.26 5.73 15.78 5.45C15.3 5.17 15.01 4.66 14.99 4.1C14.98 3.72 14.94 3.46 14.85 3.23C14.64 2.74 14.26 2.36 13.77 2.15C13.4 2 12.93 2 12 2C11.07 2 10.6 2 10.23 2.15C9.74 2.36 9.36 2.74 9.15 3.23C9.06 3.46 9.02 3.72 9.01 4.1C8.99 4.66 8.7 5.17 8.22 5.45C7.74 5.73 7.15 5.72 6.65 5.46C6.32 5.28 6.07 5.18 5.83 5.15C5.31 5.08 4.78 5.22 4.35 5.55C4.04 5.79 3.81 6.19 3.34 7C3.13 7.36 2.97 7.64 2.85 7.87" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+  </svg>
+        </span>
+        <span>Settings</span>
+      </button>
+    </div>
+
+    <div id="viewer" class="viewer"></div>
+  </div>
+
+  <div id="password-modal" class="modal" style="display:none">
+    <div class="modal-content">
+      <h3>Unlock Photo</h3>
+      <p id="modal-text">Enter master password to view</p>
+      <input type="password" id="modal-password" class="input" placeholder="Master Password" autocomplete="current-password">
+      <div class="modal-buttons">
+        <button class="btn-secondary" id="modal-cancel">Cancel</button>
+        <button class="btn-primary" id="modal-unlock">Unlock</button>
+      </div>
+      <button class="btn-faceid" id="modal-faceid" style="margin-top:8px;display:none">🔐 Use Biometric</button>
+      <div id="modal-status" class="status"></div>
+    </div>
+  </div>
+
+  <script src="./secure.js"></script>
+  <script src="./script.js"></script>
+  <script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js').then(reg => {
+        console.log('SW registered:', reg.scope);
+        reg.update();
+        
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              console.log('New version ready - reloading');
+              window.location.reload();
+            }
+          });
+        });
+      }).catch(err => console.error('SW register failed:', err));
+    });
+  }
+</script>
+</body>
+</html>
