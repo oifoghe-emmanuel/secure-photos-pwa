@@ -1,23 +1,24 @@
-const CACHE_NAME = 'securephoto-v1.1.0'; // BUMP THIS ON EVERY DEPLOY
+const CACHE_NAME = 'securephoto-v1.1.0'; // BUMP THIS ON EVERY RELEASE
 const urlsToCache = [
   './',
   './index.html',
-  './style.css',
-  './app.js',
-  './manifest.json',
-  './icon-192.png',
-  './icon-512.png'
+  './style.css?v=1.1.0',
+  './script.js',
+  './secure.js',
+  './manifest.json?v=1.1.0',
+  './icons/icon-192.png',
+  './icons/icon-512.png'
 ];
 
-// Install - cache everything
+// Install - cache all assets
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      console.log('[SW] Caching app shell');
+      console.log('[SW] Caching app shell v1.1.0');
       return cache.addAll(urlsToCache);
     })
   );
-  self.skipWaiting(); // Activate immediately, don't wait for old SW to die
+  self.skipWaiting(); // Activate new SW immediately
 });
 
 // Activate - delete old caches
@@ -26,7 +27,7 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cacheName) => {
-          if (cacheName!== CACHE_NAME) {
+          if (cacheName !== CACHE_NAME) {
             console.log('[SW] Deleting old cache:', cacheName);
             return caches.delete(cacheName);
           }
@@ -34,20 +35,16 @@ self.addEventListener('activate', (event) => {
       );
     })
   );
-  self.clients.claim(); // Take control of all open tabs immediately
+  self.clients.claim(); // Take control of all pages
 });
 
-// Fetch - Cache first, then network for updates
+// Fetch - Cache first, fallback to network
 self.addEventListener('fetch', (event) => {
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
-      // Return cached if we have it
-      if (cachedResponse) {
-        return cachedResponse;
-      }
-      // Otherwise fetch from network and cache it
+      if (cachedResponse) return cachedResponse;
+      
       return fetch(event.request).then((networkResponse) => {
-        // Only cache GET requests
         if (event.request.method === 'GET') {
           const responseClone = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => {
@@ -57,7 +54,7 @@ self.addEventListener('fetch', (event) => {
         return networkResponse;
       });
     }).catch(() => {
-      // Fallback for offline - only for navigation requests
+      // Offline fallback for navigation
       if (event.request.mode === 'navigate') {
         return caches.match('./index.html');
       }
@@ -65,7 +62,7 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// Listen for update messages from the page
+// Listen for skip waiting message from page
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
