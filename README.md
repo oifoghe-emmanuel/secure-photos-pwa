@@ -31,7 +31,7 @@ Funding 40+ hours/month for **SecurePhoto v2.0**
 [GitHub Sponsors](https://github.com/sponsors/Oifoghe-Emmanuel) - Monthly USD, shows on your GitHub profile
 
 **🇳🇬 Nigeria - Naira:**  
-[Paystack - Pay in Naira](https://paystack.shop/pay/h9wvwzrcg3) - Cards, bank transfer, USSD, Opay
+[Paystack - Pay in Naira](https://paystack.shop/pay/secure-photos) - Cards, bank transfer, USSD, Opay
 
 *Naira sponsors get same perks. DM @Oifoghe-Emmanuel proof of payment for your name in app credits.*
 
