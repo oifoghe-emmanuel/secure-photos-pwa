@@ -1,103 +1,73 @@
-// sw.js
-const CACHE_NAME = 'securephoto-v1';
-const ASSETS = [
+const CACHE_NAME = 'securephoto-v1.1.0'; // BUMP THIS ON EVERY DEPLOY
+const urlsToCache = [
+  './',
   './index.html',
   './style.css',
-  './script.js',
-  './manifest.json'
+  './app.js',
+  './manifest.json',
+  './icon-192.png',
+  './icon-512.png'
 ];
 
-// Install - cache all core files
-self.addEventListener('install', (e) => {
-  console.log('SW: Installing...');
-  e.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('SW: Caching files', ASSETS);
-        // Cache each file individually so 1 failure doesn't kill everything
-        return Promise.all(
-          ASSETS.map((url) => {
-            return cache.add(url).catch((err) => {
-              console.error('SW: Failed to cache:', url, err);
-              throw err;
-            });
-          })
-        );
-      })
-      .then(() => {
-        console.log('SW: Skip waiting');
-        return self.skipWaiting();
-      })
-      .catch((err) => {
-        console.error('SW: Install failed:', err);
-      })
+// Install - cache everything
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => {
+      console.log('[SW] Caching app shell');
+      return cache.addAll(urlsToCache);
+    })
   );
+  self.skipWaiting(); // Activate immediately, don't wait for old SW to die
 });
 
 // Activate - delete old caches
-self.addEventListener('activate', (e) => {
-  console.log('SW: Activated');
-  e.waitUntil(
-    caches.keys().then((keys) => {
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((cacheNames) => {
       return Promise.all(
-        keys.filter((key) => key !== CACHE_NAME)
-            .map((key) => {
-              console.log('SW: Deleting old cache:', key);
-              return caches.delete(key);
-            })
+        cacheNames.map((cacheName) => {
+          if (cacheName!== CACHE_NAME) {
+            console.log('[SW] Deleting old cache:', cacheName);
+            return caches.delete(cacheName);
+          }
+        })
       );
-    }).then(() => {
-      console.log('SW: Claiming clients');
-      return self.clients.claim();
+    })
+  );
+  self.clients.claim(); // Take control of all open tabs immediately
+});
+
+// Fetch - Cache first, then network for updates
+self.addEventListener('fetch', (event) => {
+  event.respondWith(
+    caches.match(event.request).then((cachedResponse) => {
+      // Return cached if we have it
+      if (cachedResponse) {
+        return cachedResponse;
+      }
+      // Otherwise fetch from network and cache it
+      return fetch(event.request).then((networkResponse) => {
+        // Only cache GET requests
+        if (event.request.method === 'GET') {
+          const responseClone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseClone);
+          });
+        }
+        return networkResponse;
+      });
+    }).catch(() => {
+      // Fallback for offline - only for navigation requests
+      if (event.request.mode === 'navigate') {
+        return caches.match('./index.html');
+      }
     })
   );
 });
 
-// Fetch - serve from cache, fallback to network, fallback to index.html for navigation
-self.addEventListener('fetch', (e) => {
-  // Only handle GET requests
-  if (e.request.method !== 'GET') return;
-
-  // Don't cache Chrome extensions or other schemes
-  if (!e.request.url.startsWith('http')) return;
-
-  e.respondWith(
-    caches.match(e.request).then((cachedResponse) => {
-      // Return cached file if found
-      if (cachedResponse) {
-        return cachedResponse;
-      }
-
-      // Not in cache, fetch from network
-      return fetch(e.request).then((networkResponse) => {
-        // Don't cache bad responses
-        if (!networkResponse || networkResponse.status !== 200 || networkResponse.type === 'opaque') {
-          return networkResponse;
-        }
-
-        // Clone response because it's a stream
-        const responseToCache = networkResponse.clone();
-
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(e.request, responseToCache);
-        });
-
-        return networkResponse;
-      }).catch(() => {
-        // Network failed and not in cache
-        // If this is a navigation request, return cached index.html
-        if (e.request.mode === 'navigate') {
-          return caches.match('./index.html');
-        }
-        // For other requests, just fail
-        return new Response('Offline', {
-          status: 503,
-          statusText: 'Service Unavailable',
-          headers: new Headers({
-            'Content-Type': 'text/plain'
-          })
-        });
-      });
-    })
-  );
+// Listen for update messages from the page
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
