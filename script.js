@@ -328,14 +328,6 @@ function toggleAbout() {
   if (dd) dd.style.display = dd.style.display === 'none'? 'block' : 'none';
 }
 
-function showFeedback() {
-  alert('Feedback: Email us at securephoto@example.com');
-}
-
-function showSponsor() {
-  alert('Sponsor SecurePhoto:\n\n☕ Buy us a coffee\n💖 GitHub Sponsors\n⭐ Star on GitHub\n\nKeeps the app free & private!');
-}
-
 function toggleSync() {
   alert('Cloud Sync coming in v2.0 with Firebase.\n\nFor now, all photos stay encrypted on your device only.');
   const toggle = $('sync-toggle');
