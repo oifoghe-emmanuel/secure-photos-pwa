@@ -1,4 +1,4 @@
-const CACHE_NAME = 'securephoto-v1.1.0'; // BUMP THIS ON EVERY RELEASE
+const CACHE_NAME = 'securephoto-v1.2.0'; // BUMP THIS ON EVERY RELEASE
 const urlsToCache = [
   './',
   './index.html',
