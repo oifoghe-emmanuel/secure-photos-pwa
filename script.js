@@ -49,6 +49,7 @@ function toggleTheme() {
 document.addEventListener('DOMContentLoaded', async () => {
   initTheme();
 
+  // Auth events
   $('signup-btn')?.addEventListener('click', handleSignup);
   $('login-btn')?.addEventListener('click', handleLogin);
   $('faceid-btn')?.addEventListener('click', handleFaceID);
@@ -57,28 +58,66 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('password')?.addEventListener('input', validatePassword);
   $('email')?.addEventListener('blur', checkEmailExists);
 
+  // App events
   $('logout-btn')?.addEventListener('click', () => logout(false));
   $('fab-btn')?.addEventListener('click', () => $('camera')?.click());
   $('camera')?.addEventListener('change', handlePhotoAdd);
   $('move-select-btn')?.addEventListener('click', () => $('move-input')?.click());
   $('move-input')?.addEventListener('change', handleImport);
 
+  // Settings events
   $('theme-toggle')?.addEventListener('change', toggleTheme);
   $('auth-method')?.addEventListener('change', saveAuthMethod);
   $('sync-toggle')?.addEventListener('change', toggleSync);
-  $('contact-item')?.addEventListener('click', toggleContact);
-  $('about-item')?.addEventListener('click', toggleAbout);
-  $('feedback-link')?.addEventListener('click', (e) => { e.preventDefault(); showFeedback(); });
-  $('sponsor-link')?.addEventListener('click', (e) => { e.preventDefault(); showSponsor(); });
 
+  // Modal events
   $('modal-cancel')?.addEventListener('click', closeModal);
   $('modal-unlock')?.addEventListener('click', submitModalPassword);
   $('modal-faceid')?.addEventListener('click', submitModalFaceID);
 
+  // Navigation
   document.querySelectorAll('.nav-item').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
 
+  // Dropdowns - FIXED: don't preventDefault on external links
+  const contactItem = $('contact-item');
+  const contactDropdown = $('contact-dropdown');
+  const aboutItem = $('about-item');
+  const aboutDropdown = $('about-dropdown');
+
+  contactItem?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    contactDropdown.style.display = contactDropdown.style.display === 'block'? 'none' : 'block';
+    aboutDropdown.style.display = 'none'; // close other
+  });
+
+  aboutItem?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    aboutDropdown.style.display = aboutDropdown.style.display === 'block'? 'none' : 'block';
+    contactDropdown.style.display = 'none'; // close other
+  });
+
+  // Close dropdowns when clicking outside
+  document.addEventListener('click', (e) => {
+    if (contactItem &&!contactItem.contains(e.target)) {
+      contactDropdown.style.display = 'none';
+    }
+    if (aboutItem &&!aboutItem.contains(e.target)) {
+      aboutDropdown.style.display = 'none';
+    }
+  });
+
+  // Feedback - internal action, prevent default
+  $('feedback-link')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    showFeedback();
+  });
+
+  // SPONSOR LINK - REMOVED preventDefault. Let Paystack open normally
+  // No event listener needed here. The <a href> handles it.
+
+  // Inactivity timer
   ['click', 'touchstart', 'mousemove', 'keydown'].forEach(evt => {
     document.addEventListener(evt, () => VaultTimer.reset());
   });
@@ -316,16 +355,6 @@ async function handleFaceID() {
 function saveAuthMethod() {
   unlockMethod = $('auth-method')?.value || 'both';
   localStorage.setItem('sp_unlock_method', unlockMethod);
-}
-
-function toggleContact() {
-  const dd = $('contact-dropdown');
-  if (dd) dd.style.display = dd.style.display === 'none'? 'block' : 'none';
-}
-
-function toggleAbout() {
-  const dd = $('about-dropdown');
-  if (dd) dd.style.display = dd.style.display === 'none'? 'block' : 'none';
 }
 
 function toggleSync() {
@@ -649,6 +678,10 @@ function closePhotoModal() {
   currentPhotoId = null;
 }
 
+function showFeedback() {
+  alert('Feedback coming soon! For now, DM @OifogheEmmanuel on X or GitHub.');
+}
+
 // Expose for inline onclick fallback
 window.handleSignup = handleSignup;
 window.handleLogin = handleLogin;
@@ -659,14 +692,11 @@ window.logout = logout;
 window.switchTab = switchTab;
 window.toggleTheme = toggleTheme;
 window.saveAuthMethod = saveAuthMethod;
-window.toggleContact = toggleContact;
-window.toggleAbout = toggleAbout;
-window.showFeedback = showFeedback;
-window.showSponsor = showSponsor;
 window.toggleSync = toggleSync;
 window.closeModal = closeModal;
 window.submitModalPassword = submitModalPassword;
 window.submitModalFaceID = submitModalFaceID;
 window.closePhotoModal = closePhotoModal;
+window.showFeedback = showFeedback;
 
 } // End window.SP_LOADED check
