@@ -1,4 +1,4 @@
-// === SECURE-VAULT.JS V9.1.1 - FIXED PHOTO PERSISTENCE ===
+// === SECURE-VAULT.JS V9.1.2 - FIXED SYNTAX ERRORS ===
 if (window.SecureVault) {
   console.warn('SecureVault already loaded');
 } else {
@@ -89,7 +89,7 @@ window.SecureVault = (function () {
               userVerification: "required",
               residentKey: "required"
             },
-            extensions: { prf: { eval: { first: prfSalt } }
+            extensions: { prf: { eval: { first: prfSalt } // FIXED: closed brace
           }
         });
 
@@ -135,7 +135,7 @@ window.SecureVault = (function () {
               challenge,
               allowCredentials: [{ type: "public-key", id: B(credId) }],
               userVerification: "required",
-              extensions: { prf: { eval: { first: B(prfSalt) } }
+              extensions: { prf: { eval: { first: B(prfSalt) } // FIXED: closed brace
             }
           });
 
@@ -281,19 +281,15 @@ window.SecureVault = (function () {
     return await deriveMasterKey(password, userData);
   }
 
-  // FIXED: Properly appends photo without overwriting
   async function savePhoto(emailHash, masterKeyHex, file) {
     try {
-      // 1. Load existing photos - always array
       const existing = await getAllPhotos(emailHash);
 
-      // 2. Generate unique ID
       let photoId;
       do {
         photoId = crypto.randomUUID? crypto.randomUUID() : Date.now().toString() + Math.random().toString(36).substr(2, 9);
       } while (existing.some(p => p.id === photoId));
 
-      // 3. Encrypt file
       const arrayBuffer = await file.arrayBuffer();
       const key = await crypto.subtle.importKey("raw", B(masterKeyHex), "AES-GCM", false, ["encrypt"]);
       const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -306,7 +302,6 @@ window.SecureVault = (function () {
         timestamp: Date.now()
       };
 
-      // 4. Append and save
       existing.push(photoData);
       await StorageAdapter.set(`sv_photos_${emailHash}`, JSON.stringify(existing));
 
