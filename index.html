@@ -270,55 +270,52 @@
   <script src="./secure.js"></script>
   <script src="./script.js"></script>
   <script>
-  // Service Worker Registration + Update Handler
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./sw.js').then(registration => {
-        console.log('[SW] Registered:', registration.scope);
-        registration.update(); // Check for updates on load
-        
-        // If SW is already waiting, show banner immediately
-        if (registration.waiting) {
-          showUpdateBanner(registration.waiting);
-        }
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').then(registration => {
+      console.log('[SW] Registered:', registration.scope);
 
-        // Listen for new SW installing
-        registration.addEventListener('updatefound', () => {
-          const newWorker = registration.installing;
-          newWorker.addEventListener('statechange', () => {
-            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              console.log('[SW] New version ready');
-              showUpdateBanner(newWorker);
-            }
-          });
-        });
-      }).catch(err => console.error('[SW] Registration failed:', err));
-    });
+      // Check for updates only when banner is clicked, not on every load
+      // registration.update();  <- REMOVED
 
-    // Reload page when new SW takes control
-    let refreshing = false;
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (!refreshing) {
-        refreshing = true;
-        window.location.reload();
+      if (registration.waiting) {
+        showUpdateBanner(registration.waiting);
       }
-    });
-  }
 
-  // Show update banner UI
-  function showUpdateBanner(worker) {
-    const banner = document.getElementById('update-banner');
-    banner.style.display = 'block';
+      registration.addEventListener('updatefound', () => {
+        const newWorker = registration.installing;
+        newWorker.addEventListener('statechange', () => {
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            console.log('[SW] New version ready');
+            showUpdateBanner(newWorker);
+          }
+        });
+      });
+    }).catch(err => console.error('[SW] Registration failed:', err));
+  });
 
-    document.getElementById('update-btn').onclick = () => {
-      worker.postMessage({ type: 'SKIP_WAITING' });
-      banner.style.display = 'none';
-    };
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (refreshing) return;
+    refreshing = true;
+    // Small delay so the new SW actually takes control
+    setTimeout(() => window.location.reload(), 200);
+  });
+}
 
-    document.getElementById('dismiss-btn').onclick = () => {
-      banner.style.display = 'none';
-    };
-  }
+function showUpdateBanner(worker) {
+  const banner = document.getElementById('update-banner');
+  banner.style.display = 'block';
+
+  document.getElementById('update-btn').onclick = () => {
+    worker.postMessage({ type: 'SKIP_WAITING' });
+    banner.style.display = 'none';
+  };
+
+  document.getElementById('dismiss-btn').onclick = () => {
+    banner.style.display = 'none';
+  };
+}
   </script>
-</body>
+  </body>
 </html>
