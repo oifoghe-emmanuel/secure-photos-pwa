@@ -80,7 +80,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
 
-  // Dropdowns - FIXED: don't preventDefault on external links
+  // Dropdowns
   const contactItem = $('contact-item');
   const contactDropdown = $('contact-dropdown');
   const aboutItem = $('about-item');
@@ -89,16 +89,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   contactItem?.addEventListener('click', (e) => {
     e.stopPropagation();
     contactDropdown.style.display = contactDropdown.style.display === 'block'? 'none' : 'block';
-    aboutDropdown.style.display = 'none'; // close other
+    aboutDropdown.style.display = 'none';
   });
 
   aboutItem?.addEventListener('click', (e) => {
     e.stopPropagation();
     aboutDropdown.style.display = aboutDropdown.style.display === 'block'? 'none' : 'block';
-    contactDropdown.style.display = 'none'; // close other
+    contactDropdown.style.display = 'none';
   });
 
-  // Close dropdowns when clicking outside
   document.addEventListener('click', (e) => {
     if (contactItem &&!contactItem.contains(e.target)) {
       contactDropdown.style.display = 'none';
@@ -108,14 +107,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Feedback - internal action, prevent default
   $('feedback-link')?.addEventListener('click', (e) => {
     e.preventDefault();
     showFeedback();
   });
-
-  // SPONSOR LINK - REMOVED preventDefault. Let Paystack open normally
-  // No event listener needed here. The <a href> handles it.
 
   // Inactivity timer
   ['click', 'touchstart', 'mousemove', 'keydown'].forEach(evt => {
@@ -143,7 +138,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const authSelect = $('auth-method');
   if (authSelect) authSelect.value = unlockMethod;
 
-  if (localStorage.getItem('sv_current_user')) {
+  // FIX 1: Restore session if exists
+  const savedHash = localStorage.getItem('sv_current_user');
+  if (savedHash) {
+    currentEmailHash = savedHash;
+    console.log('Restored emailHash:', currentEmailHash);
     showLogin();
   } else {
     showSignup();
@@ -376,8 +375,13 @@ function switchTab(tabName) {
 
 async function loadPhotos() {
   console.log('Loading photos for user:', currentEmailHash);
+  if (!currentEmailHash) {
+    console.warn('No emailHash, skipping loadPhotos');
+    return;
+  }
+
   let photos = await SecureVault.getAllPhotos(currentEmailHash);
-  console.log('Found photos:', photos);
+  console.log('Found photos:', photos.length);
   const gallery = $('gallery');
   if (!gallery) return;
 
@@ -422,13 +426,23 @@ async function loadPhotos() {
   });
 }
 
+// FIX 2: Guard checks + await loadPhotos
 async function handlePhotoAdd(e) {
   const files = Array.from(e.target.files);
   const status = $('app-status');
+
+  if (!currentEmailHash ||!masterKeyHex) {
+    alert('Session expired. Please lock and unlock the vault again.');
+    logout(false);
+    e.target.value = '';
+    return;
+  }
+
   for (let i = 0; i < files.length; i++) {
     try {
       if (status) status.textContent = `Encrypting ${i+1}/${files.length}...`;
       await SecureVault.savePhoto(currentEmailHash, masterKeyHex, files[i]);
+      console.log('Saved photo', i+1, 'for', currentEmailHash);
     } catch (err) {
       console.error('Photo error:', err);
       if (status) {
@@ -439,18 +453,27 @@ async function handlePhotoAdd(e) {
       return;
     }
   }
+
   if (status) {
     status.className = 'status success';
     status.textContent = `✅ Added ${files.length} encrypted photos`;
     setTimeout(() => { status.textContent = ''; status.className = 'status'; }, 3000);
   }
-  loadPhotos();
+
+  await loadPhotos(); // wait for it
   e.target.value = '';
 }
 
 async function handleImport(e) {
   const files = Array.from(e.target.files);
   const status = $('move-status');
+
+  if (!currentEmailHash ||!masterKeyHex) {
+    alert('Session expired. Please lock and unlock the vault again.');
+    logout(false);
+    e.target.value = '';
+    return;
+  }
 
   for (let i = 0; i < files.length; i++) {
     try {
@@ -473,13 +496,25 @@ async function handleImport(e) {
     setTimeout(() => { status.textContent = ''; status.className = 'status'; }, 3000);
   }
 
-  loadPhotos();
+  await loadPhotos();
   e.target.value = '';
 }
 
 async function requestPhotoUnlock(photoId, thumbElement) {
   console.log('Requesting unlock for:', photoId);
   currentPhotoId = photoId;
+
+  // FIX 3: If masterKeyHex is null, force re-auth
+  if (!masterKeyHex) {
+    const emailHash = localStorage.getItem('sv_current_user');
+    if (!emailHash) {
+      alert('Session expired. Please login again.');
+      logout(false);
+      return;
+    }
+    showPasswordModal();
+    return;
+  }
 
   const tempKey = masterKeyHex;
   masterKeyHex = null;
@@ -492,7 +527,7 @@ async function requestPhotoUnlock(photoId, thumbElement) {
       masterKeyHex = result.masterKey;
       openPhotoViewer(photoId, thumbElement);
     } else {
-      alert('Biometric authentication failed: ' + result.error + '\n\nPhoto will not open.');
+      alert('Biometric authentication failed: ' + result.error);
       masterKeyHex = tempKey;
     }
   } else {
@@ -601,7 +636,6 @@ async function openPhotoViewer(photoId, thumbElement) {
 
     const blob = new Blob([decrypted], { type: 'image/jpeg' });
     const url = URL.createObjectURL(blob);
-    console.log('Blob URL:', url);
 
     const viewer = $('viewer');
     if (viewer) {
