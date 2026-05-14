@@ -1,349 +1,736 @@
-// === SECURE-VAULT.JS V9.1.0 - GRACEFUL BIOMETRIC FALLBACK ===
-if (window.SecureVault) {
-  console.warn('SecureVault already loaded');
+if (window.SP_LOADED) {
+  console.warn('SecurePhoto already loaded');
 } else {
-window.SecureVault = (function () {
-  const H = b => [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");
-  const B = h => new Uint8Array(h.match(/.{1,2}/g).map(b=>parseInt(b,16)));
+  window.SP_LOADED = true;
 
-  function concatUint8(...arrays) {
-    let totalLength = arrays.reduce((acc, arr) => acc + arr.length, 0);
-    let result = new Uint8Array(totalLength);
-    let offset = 0;
-    for (let arr of arrays) { result.set(arr, offset); offset += arr.length; }
-    return result;
-  }
+let masterKeyHex = null;
+let currentEmailHash = null;
+let currentUsername = '';
+let selectedPhotos = new Set();
+let unlockMethod = 'both';
+let inactivityTimer = null;
+let photoViewTimer = null;
+let currentPhotoId = null;
+let statusTimeout = null;
+const FUNNY_EMOJIS = ['🤪','🎭','🎪','🎨','🎯','🤡','👾','🦄','🍕','🚀','🎸','🦖','🧸','🎲','🪩','🦜','🎮','🌮'];
 
-  async function hashIdentity(str) {
-    const data = new TextEncoder().encode(str.toLowerCase().trim());
-    const hash = await crypto.subtle.digest("SHA-256", data);
-    return H(hash).slice(0, 32);
-  }
+const $ = (id) => document.getElementById(id);
+const show = (el) => el && (el.style.display = 'block');
+const hide = (el) => el && (el.style.display = 'none');
+const B = h => new Uint8Array(h.match(/.{1,2}/g).map(b=>parseInt(b,16)));
 
-  async function wipeAllVaultData() {
-    const keys = Object.keys(localStorage);
-    let count = 0;
-    keys.forEach(k => {
-      if (k.startsWith('sv_') || k.startsWith('sp_')) {
-        localStorage.removeItem(k);
-        count++;
-      }
-    });
-    console.log(`WIPED ${count} VAULT KEYS`);
-    return count;
-  }
+const VaultTimer = {
+  reset() {
+    clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(() => {
+      if (currentEmailHash) logout(true);
+    }, 5 * 60 * 1000);
+  },
+  startPhotoTimer() {
+    clearTimeout(photoViewTimer);
+    photoViewTimer = setTimeout(() => closePhotoModal(), 60 * 1000);
+  },
+  stopPhotoTimer() { clearTimeout(photoViewTimer); }
+};
 
-  async function emailExists(email) {
-    const emailHash = await hashIdentity(email);
-    const users = JSON.parse(localStorage.getItem('sv_users') || '{}');
-    return!!users[emailHash];
-  }
+function initTheme() {
+  const saved = localStorage.getItem('sp_theme') || 'dark';
+  document.body.className = saved;
+  const toggle = $('theme-toggle');
+  if (toggle) toggle.checked = saved === 'light';
+}
 
-  async function getUserByEmail(email) {
-    const emailHash = await hashIdentity(email);
-    const users = JSON.parse(localStorage.getItem('sv_users') || '{}');
-    return users[emailHash] || null;
-  }
+function toggleTheme() {
+  const isLight = $('theme-toggle')?.checked;
+  document.body.className = isLight? 'light' : 'dark';
+  localStorage.setItem('sp_theme', isLight? 'light' : 'dark');
+}
 
-  let StorageAdapter = {
-    get: async (key) => localStorage.getItem(key),
-    set: async (key, val) => localStorage.setItem(key, val),
-    remove: async (key) => localStorage.removeItem(key)
-  };
+document.addEventListener('DOMContentLoaded', async () => {
+  initTheme();
 
-  const SecureStore = {
-    async isAvailable() {
-      try {
-        if (!window.PublicKeyCredential) return false;
-        return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
-      } catch {
-        return false;
-      }
-    },
+  // Auth events
+  $('signup-btn')?.addEventListener('click', handleSignup);
+  $('login-btn')?.addEventListener('click', handleLogin);
+  $('faceid-btn')?.addEventListener('click', handleFaceID);
+  $('show-login-link')?.addEventListener('click', () => showLogin());
+  $('show-signup-link')?.addEventListener('click', showSignup);
+  $('password')?.addEventListener('input', validatePassword);
+  $('email')?.addEventListener('blur', checkEmailExists);
 
-    async saveMasterKey(userId, masterKeyHex) {
-      const biometricAvailable = await this.isAvailable();
+  // App events
+  $('logout-btn')?.addEventListener('click', () => logout(false));
+  $('fab-btn')?.addEventListener('click', () => $('camera')?.click());
+  $('camera')?.addEventListener('change', handlePhotoAdd);
+  $('move-select-btn')?.addEventListener('click', () => $('move-input')?.click());
+  $('move-input')?.addEventListener('change', handleImport);
 
-      if (!biometricAvailable) {
-        console.log('Biometrics not available - using password fallback');
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const key = await crypto.subtle.importKey("raw", B(await hashIdentity(userId + "fallback")), "AES-GCM", false, ["encrypt"]);
-        const enc = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, B(masterKeyHex));
-        await StorageAdapter.set(`sv_fallback_${userId}`, H(concatUint8(iv, new Uint8Array(enc))));
-        return { success: true, secure: false, reason: 'no_biometric' };
-      }
+  // Settings events
+  $('theme-toggle')?.addEventListener('change', toggleTheme);
+  $('auth-method')?.addEventListener('change', saveAuthMethod);
+  $('sync-toggle')?.addEventListener('change', toggleSync);
 
-      try {
-        const masterKey = B(masterKeyHex);
-        const prfSalt = crypto.getRandomValues(new Uint8Array(32));
+  // Modal events
+  $('modal-cancel')?.addEventListener('click', closeModal);
+  $('modal-unlock')?.addEventListener('click', submitModalPassword);
+  $('modal-faceid')?.addEventListener('click', submitModalFaceID);
 
-        const challenge = crypto.getRandomValues(new Uint8Array(32));
-        const cred = await navigator.credentials.create({
-          publicKey: {
-            challenge,
-            rp: { name: "SecurePhoto", id: window.location.hostname },
-            user: { id: B(await hashIdentity(userId)), name: userId, displayName: userId },
-            pubKeyCredParams: [{ type: "public-key", alg: -7 }],
-            authenticatorSelection: {
-              authenticatorAttachment: "platform",
-              userVerification: "required",
-              residentKey: "required"
-            },
-            extensions: { prf: { eval: { first: prfSalt } } }
-          }
-        });
+  // Navigation
+  document.querySelectorAll('.nav-item').forEach(btn => {
+    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+  });
 
-        const extResults = cred.getClientExtensionResults();
-        const prfSecret = extResults.prf?.results?.first;
-        if (!prfSecret) {
-          throw new Error("PRF_not_supported");
-        }
+  // Dropdowns
+  const contactItem = $('contact-item');
+  const contactDropdown = $('contact-dropdown');
+  const aboutItem = $('about-item');
+  const aboutDropdown = $('about-dropdown');
 
-        const prfKey = await crypto.subtle.importKey("raw", prfSecret, "AES-GCM", false, ["encrypt"]);
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const encryptedMaster = await crypto.subtle.encrypt(
-          { name: "AES-GCM", iv },
-          prfKey,
-          masterKey
-        );
+  contactItem?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    contactDropdown.style.display = contactDropdown.style.display === 'block'? 'none' : 'block';
+    aboutDropdown.style.display = 'none';
+  });
 
-        await StorageAdapter.set(`sv_cred_${userId}`, H(cred.rawId));
-        await StorageAdapter.set(`sv_prf_salt_${userId}`, H(prfSalt));
-        await StorageAdapter.set(`sv_enc_master_${userId}`, H(concatUint8(iv, new Uint8Array(encryptedMaster))));
+  aboutItem?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    aboutDropdown.style.display = aboutDropdown.style.display === 'block'? 'none' : 'block';
+    contactDropdown.style.display = 'none';
+  });
 
-        return { success: true, secure: true };
-      } catch (e) {
-        console.log('Biometric setup failed, using fallback:', e.message);
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const key = await crypto.subtle.importKey("raw", B(await hashIdentity(userId + "fallback")), "AES-GCM", false, ["encrypt"]);
-        const enc = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, B(masterKeyHex));
-        await StorageAdapter.set(`sv_fallback_${userId}`, H(concatUint8(iv, new Uint8Array(enc))));
-        return { success: true, secure: false, reason: e.message };
-      }
-    },
-
-    async getMasterKey(userId) {
-      try {
-        const credId = await StorageAdapter.get(`sv_cred_${userId}`);
-        const prfSalt = await StorageAdapter.get(`sv_prf_salt_${userId}`);
-        const encMaster = await StorageAdapter.get(`sv_enc_master_${userId}`);
-
-        if (credId && prfSalt && encMaster && await this.isAvailable()) {
-          const challenge = crypto.getRandomValues(new Uint8Array(32));
-          const assertion = await navigator.credentials.get({
-            publicKey: {
-              challenge,
-              allowCredentials: [{ type: "public-key", id: B(credId) }],
-              userVerification: "required",
-              extensions: { prf: { eval: { first: B(prfSalt) } } }
-            }
-          });
-
-          const extResults = assertion.getClientExtensionResults();
-          const prfSecret = extResults.prf?.results?.first;
-          if (!prfSecret) throw new Error("PRF authentication failed");
-
-          const prfKey = await crypto.subtle.importKey("raw", prfSecret, "AES-GCM", false, ["decrypt"]);
-          const combined = B(encMaster);
-          const iv = combined.slice(0, 12);
-          const ct = combined.slice(12);
-          const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, prfKey, ct);
-
-          return { success: true, masterKey: H(new Uint8Array(decrypted)), secure: true };
-        }
-
-        const enc = await StorageAdapter.get(`sv_fallback_${userId}`);
-        if (enc) {
-          const blob = B(enc);
-          const iv = blob.slice(0, 12);
-          const ct = blob.slice(12);
-          const key = await crypto.subtle.importKey("raw", B(await hashIdentity(userId + "fallback")), "AES-GCM", false, ["decrypt"]);
-          const dec = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
-          return { success: true, masterKey: H(new Uint8Array(dec)), secure: false };
-        }
-        throw new Error("No biometric or fallback key found");
-      } catch (e) {
-        console.error('getMasterKey failed:', e);
-        return { success: false, error: e.message };
-      }
+  document.addEventListener('click', (e) => {
+    if (contactItem &&!contactItem.contains(e.target)) {
+      contactDropdown.style.display = 'none';
     }
-  };
-
-  async function deriveMasterKey(password, userData) {
-    try {
-      const keyMaterial = await crypto.subtle.importKey(
-        "raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]
-      );
-      const derivedKey = await crypto.subtle.deriveKey(
-        { name: "PBKDF2", salt: B(userData.salt), iterations: 100000, hash: "SHA-256" },
-        keyMaterial,
-        { name: "AES-GCM", length: 256 },
-        false,
-        ["decrypt"]
-      );
-
-      const decryptedKey = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: B(userData.iv) },
-        derivedKey,
-        B(userData.encryptedKey)
-      );
-
-      return { success: true, masterKey: H(new Uint8Array(decryptedKey)) };
-    } catch (e) {
-      return { success: false, error: "Wrong password" };
+    if (aboutItem &&!aboutItem.contains(e.target)) {
+      aboutDropdown.style.display = 'none';
     }
+  });
+
+  $('feedback-link')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    showFeedback();
+  });
+
+  // Inactivity timer
+  ['click', 'touchstart', 'mousemove', 'keydown'].forEach(evt => {
+    document.addEventListener(evt, () => VaultTimer.reset());
+  });
+
+  if (typeof SecureVault === 'undefined') {
+    showAuthStatus('Loading security module...', 'error');
+    setTimeout(() => location.reload(), 1000);
+    return;
   }
 
-  async function signup(email, username, password) {
-    try {
-      const emailHash = await hashIdentity(email);
-      const usernameHash = await hashIdentity(username);
+  // Biometric UI handling
+  const available = await SecureVault.isBiometricAvailable();
+  if (!available) {
+    if ($('faceid-btn')) $('faceid-btn').style.display = 'none';
+    if ($('modal-faceid')) $('modal-faceid').style.display = 'none';
+    if ($('bio-unavailable-note')) $('bio-unavailable-note').style.display = 'block';
+  } else {
+    if ($('faceid-btn')) $('faceid-btn').style.display = 'block';
+    if ($('modal-faceid')) $('modal-faceid').style.display = 'block';
+  }
 
-      if (await emailExists(email)) {
-        return { success: false, error: "Email already registered. Please login.", exists: true };
+  unlockMethod = localStorage.getItem('sp_unlock_method') || 'both';
+  const authSelect = $('auth-method');
+  if (authSelect) authSelect.value = unlockMethod;
+
+  // FIX 1: Restore session if exists
+  const savedHash = localStorage.getItem('sv_current_user');
+  if (savedHash) {
+    currentEmailHash = savedHash;
+    console.log('Restored emailHash:', currentEmailHash);
+    showLogin();
+  } else {
+    showSignup();
+  }
+
+  VaultTimer.reset();
+});
+
+function showSignup() {
+  $('email').value = '';
+  $('username').value = '';
+  $('password').value = '';
+  validatePassword();
+  hide($('login-form'));
+  show($('signup-form'));
+  clearStatus();
+}
+
+function showLogin(prefillEmail = '') {
+  if (prefillEmail) $('login-email').value = prefillEmail;
+  else $('login-email').value = '';
+  $('login-password').value = '';
+  hide($('signup-form'));
+  show($('login-form'));
+  clearStatus();
+}
+
+async function checkEmailExists() {
+  const email = $('email')?.value;
+  if (!email) return;
+  const exists = await SecureVault.emailExists(email);
+  if (exists) {
+    showAuthStatus('Email already registered. Redirecting to login...', 'info');
+    setTimeout(() => showLogin(email), 1500);
+  }
+}
+
+function validatePassword() {
+  const pwd = $('password')?.value || '';
+  const hasLength = pwd.length >= 8;
+  const hasLetter = /[a-zA-Z]/.test(pwd);
+  const hasNumber = /[0-9]/.test(pwd);
+  const hasSymbol = /[^a-zA-Z0-9]/.test(pwd);
+
+  $('rule-length')?.classList.toggle('valid', hasLength);
+  $('rule-letter')?.classList.toggle('valid', hasLetter);
+  $('rule-number')?.classList.toggle('valid', hasNumber);
+  $('rule-symbol')?.classList.toggle('valid', hasSymbol);
+
+  const btn = $('signup-btn');
+  if (btn) btn.disabled =!(hasLength && hasLetter && hasNumber && hasSymbol);
+}
+
+function showAuthStatus(msg, type = '') {
+  clearTimeout(statusTimeout);
+  const el = $('auth-status');
+  if (el) {
+    el.textContent = msg;
+    el.className = 'status ' + (type && type!== 'info'? type : '');
+
+    if (type === 'error') {
+      statusTimeout = setTimeout(() => {
+        el.textContent = '';
+        el.className = 'status';
+      }, 3000);
+    }
+  }
+}
+
+function clearStatus() {
+  clearTimeout(statusTimeout);
+  showAuthStatus('');
+}
+
+function showApp() {
+  $('auth-screen')?.classList.remove('active');
+  $('app-screen')?.classList.add('active');
+  const headerUser = $('header-username');
+  if (headerUser) headerUser.textContent = '@' + currentUsername;
+  loadPhotos();
+}
+
+function logout(auto = false) {
+  masterKeyHex = null;
+  currentEmailHash = null;
+  currentUsername = '';
+  $('app-screen')?.classList.remove('active');
+  $('auth-screen')?.classList.add('active');
+  const pwdInput = $('login-password');
+  if (pwdInput) pwdInput.value = '';
+  showLogin();
+  if (!auto) showAuthStatus('Vault locked', 'success');
+  else showAuthStatus('Session expired - please unlock', 'error');
+  clearTimeout(inactivityTimer);
+  clearTimeout(photoViewTimer);
+}
+
+async function handleSignup() {
+  await SecureVault.wipeAllVaultData();
+
+  const email = $('email')?.value;
+  const username = $('username')?.value;
+  const password = $('password')?.value;
+
+  if (!email ||!username ||!password) {
+    showAuthStatus('Fill all fields', 'error');
+    return;
+  }
+
+  if (password.length < 8 ||!/[a-zA-Z]/.test(password) ||!/[0-9]/.test(password) ||!/[^a-zA-Z0-9]/.test(password)) {
+    showAuthStatus('Password must have 8+ chars, 1 letter, 1 number, 1 symbol', 'error');
+    return;
+  }
+
+  const btn = $('signup-btn');
+  if (btn) btn.disabled = true;
+  showAuthStatus('Creating secure account...', 'info');
+
+  try {
+    const result = await SecureVault.signup(email, username, password);
+    if (!result.success) {
+      if (result.exists) {
+        showAuthStatus('Email already exists. Redirecting to login...', 'error');
+        setTimeout(() => showLogin(email), 1500);
+        return;
       }
+      throw new Error(result.error);
+    }
 
-      const masterKey = crypto.getRandomValues(new Uint8Array(32));
-      const masterKeyHex = H(masterKey);
+    currentUsername = username;
+    masterKeyHex = result.masterKey;
+    currentEmailHash = result.emailHash;
 
-      const salt = crypto.getRandomValues(new Uint8Array(16));
-      const iv = crypto.getRandomValues(new Uint8Array(12));
+    showAuthStatus('Setting up security...', 'info');
+    const bioResult = await SecureVault.saveMasterKey(currentEmailHash, masterKeyHex);
 
-      const keyMaterial = await crypto.subtle.importKey(
-        "raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]
-      );
-      const derivedKey = await crypto.subtle.deriveKey(
-        { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
-        keyMaterial,
-        { name: "AES-GCM", length: 256 },
-        false,
-        ["encrypt"]
-      );
+    if (bioResult.secure) {
+      showAuthStatus('✅ Account created with biometric security!', 'success');
+    } else {
+      showAuthStatus('✅ Account created! Biometric unavailable.', 'success');
+    }
+    setTimeout(showApp, 1000);
+  } catch (err) {
+    showAuthStatus('Signup failed: ' + err.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
 
-      const encryptedKey = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv },
-        derivedKey,
-        masterKey
-      );
+async function handleLogin() {
+  const email = $('login-email')?.value;
+  const password = $('login-password')?.value;
 
-      const userKey = await crypto.subtle.importKey("raw", masterKey, "AES-GCM", false, ["encrypt"]);
-      const usernameIv = crypto.getRandomValues(new Uint8Array(12));
-      const encryptedUsername = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv: usernameIv },
-        userKey,
-        new TextEncoder().encode(username)
-      );
+  if (!email ||!password) {
+    showAuthStatus('Enter email and password', 'error');
+    return;
+  }
 
-      const userData = {
-        emailHash,
-        usernameHash,
-        encryptedUsername: H(concatUint8(usernameIv, new Uint8Array(encryptedUsername))),
-        salt: H(salt),
-        iv: H(iv),
-        encryptedKey: H(new Uint8Array(encryptedKey))
-      };
+  showAuthStatus('Checking credentials...', 'info');
 
+  try {
+    const result = await SecureVault.login(email, password);
+    if (!result.success) throw new Error(result.error);
+
+    showAuthStatus('✅ Vault unlocked', 'success');
+    masterKeyHex = result.masterKey;
+    currentEmailHash = result.emailHash;
+    currentUsername = result.username;
+    console.log('Logged in as:', currentEmailHash);
+    setTimeout(showApp, 500);
+  } catch (err) {
+    const msg = err.message.replace('Login: ', '');
+    showAuthStatus(msg.includes('Email not found')? 'Email not found' : msg, 'error');
+  }
+}
+
+async function handleFaceID() {
+  const emailHash = localStorage.getItem('sv_current_user');
+  if (!emailHash) {
+    showAuthStatus('No account found. Please login with password first.', 'error');
+    return;
+  }
+
+  showAuthStatus('Use biometric security...', 'info');
+
+  try {
+    const result = await SecureVault.getMasterKey(emailHash);
+    if (result.success) {
+      showAuthStatus('✅ Vault unlocked', 'success');
+      masterKeyHex = result.masterKey;
+      currentEmailHash = emailHash;
       const users = JSON.parse(localStorage.getItem('sv_users') || '{}');
-      users[emailHash] = userData;
-      localStorage.setItem('sv_users', JSON.stringify(users));
-      localStorage.setItem('sv_current_user', emailHash);
-
-      return { success: true, user: userData, masterKey: masterKeyHex, emailHash };
-    } catch (e) {
-      return { success: false, error: e.message };
-    }
-  }
-
-  async function login(email, password) {
-    try {
-      const userData = await getUserByEmail(email);
-      if (!userData) throw new Error("Email not found");
-
-      const result = await deriveMasterKey(password, userData);
-      if (!result.success) throw new Error(result.error);
-
-      localStorage.setItem('sv_current_user', userData.emailHash);
-
-      const userKey = await crypto.subtle.importKey("raw", B(result.masterKey), "AES-GCM", false, ["decrypt"]);
+      const userData = users[emailHash];
+      const userKey = await crypto.subtle.importKey("raw", B(masterKeyHex), "AES-GCM", false, ["decrypt"]);
       const encUsername = B(userData.encryptedUsername);
       const usernameIv = encUsername.slice(0, 12);
       const usernameCt = encUsername.slice(12);
       const decUsername = await crypto.subtle.decrypt({ name: "AES-GCM", iv: usernameIv }, userKey, usernameCt);
-      const username = new TextDecoder().decode(decUsername);
-
-      return { success: true, masterKey: result.masterKey, username, emailHash: userData.emailHash };
-    } catch (e) {
-      return { success: false, error: e.message };
+      currentUsername = new TextDecoder().decode(decUsername);
+      setTimeout(showApp, 500);
+    } else {
+      throw new Error(result.error);
     }
+  } catch (err) {
+    showAuthStatus('Biometric failed: ' + err.message, 'error');
   }
-
-  async function verifyPassword(password, userData) {
-    return await deriveMasterKey(password, userData);
-  }
-
-  async function savePhoto(emailHash, masterKeyHex, file) {
-    try {
-      const photoId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
-      const arrayBuffer = await file.arrayBuffer();
-
-      const key = await crypto.subtle.importKey("raw", B(masterKeyHex), "AES-GCM", false, ["encrypt"]);
-      const iv = crypto.getRandomValues(new Uint8Array(12));
-      const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, arrayBuffer);
-
-      const combined = concatUint8(iv, new Uint8Array(encrypted));
-      const photoData = {
-        id: photoId,
-        encrypted: H(combined),
-        timestamp: Date.now()
-      };
-
-      const existing = await getAllPhotos(emailHash);
-      existing.push(photoData);
-      await StorageAdapter.set(`sv_photos_${emailHash}`, JSON.stringify(existing));
-
-      return { success: true, photoId };
-    } catch (e) {
-      return { success: false, error: e.message };
-    }
-  }
-
-  async function getAllPhotos(emailHash) {
-    const raw = await StorageAdapter.get(`sv_photos_${emailHash}`);
-    return raw? JSON.parse(raw) : [];
-  }
-
-  async function saveAllPhotos(emailHash, photosArray) {
-    await StorageAdapter.set(`sv_photos_${emailHash}`, JSON.stringify(photosArray));
-  }
-
-  async function decryptBytes(masterKeyHex, encryptedHex) {
-    const combined = B(encryptedHex);
-    const iv = combined.slice(0, 12);
-    const ct = combined.slice(12);
-
-    const key = await crypto.subtle.importKey("raw", B(masterKeyHex), "AES-GCM", false, ["decrypt"]);
-    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
-    return new Uint8Array(decrypted);
-  }
-
-  async function isBiometricAvailable() {
-    return await SecureStore.isAvailable();
-  }
-
-  return {
-    wipeAllVaultData,
-    emailExists,
-    getUserByEmail,
-    signup,
-    login,
-    verifyPassword,
-    saveMasterKey: SecureStore.saveMasterKey.bind(SecureStore),
-    getMasterKey: SecureStore.getMasterKey.bind(SecureStore),
-    savePhoto,
-    getAllPhotos,
-    saveAllPhotos,
-    decryptBytes,
-    isBiometricAvailable
-  };
-})();
 }
+
+function saveAuthMethod() {
+  unlockMethod = $('auth-method')?.value || 'both';
+  localStorage.setItem('sp_unlock_method', unlockMethod);
+}
+
+function toggleSync() {
+  alert('Cloud Sync coming in v2.0 with Firebase.\n\nFor now, all photos stay encrypted on your device only.');
+  const toggle = $('sync-toggle');
+  if (toggle) toggle.checked = false;
+}
+
+function switchTab(tabName) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+
+  const targetTab = $(tabName + '-tab');
+  const targetNav = document.querySelector(`[data-tab="${tabName}"]`);
+
+  if (targetTab) targetTab.classList.add('active');
+  if (targetNav) targetNav.classList.add('active');
+}
+
+async function loadPhotos() {
+  console.log('Loading photos for user:', currentEmailHash);
+  if (!currentEmailHash) {
+    console.warn('No emailHash, skipping loadPhotos');
+    return;
+  }
+
+  let photos = await SecureVault.getAllPhotos(currentEmailHash);
+  console.log('Found photos:', photos.length);
+  const gallery = $('gallery');
+  if (!gallery) return;
+
+  let needsSave = false;
+  photos = photos.map(p => {
+    if (!p.id && p.encrypted) {
+      p.id = p.timestamp? p.timestamp.toString() + Math.random().toString(36).substr(2, 9) : Date.now().toString() + Math.random().toString(36).substr(2, 9);
+      needsSave = true;
+      console.log('Migrated old photo, gave it ID:', p.id);
+    }
+    return p;
+  });
+
+  if (needsSave) {
+    await SecureVault.saveAllPhotos(currentEmailHash, photos);
+    console.log('Saved migrated photos');
+  }
+
+  if (!photos || photos.length === 0) {
+    gallery.innerHTML = `<div class="empty-state-home">
+      <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+        <circle cx="8.5" cy="8.5" r="1.5"></circle>
+        <polyline points="21 15 16 10 5 21"></polyline>
+      </svg>
+      <h3>No Photos Yet</h3>
+      <p>Press the + button to add your first encrypted photo</p>
+    </div>`;
+    return;
+  }
+
+  gallery.innerHTML = '';
+  photos.forEach(photo => {
+    if (!photo.id) return;
+    const item = document.createElement('div');
+    item.className = 'photo-thumb';
+    item.dataset.id = photo.id;
+    const emoji = FUNNY_EMOJIS[Math.floor(Math.random() * FUNNY_EMOJIS.length)];
+    item.innerHTML = `<div style="font-size:48px">${emoji}</div>`;
+    item.onclick = (e) => requestPhotoUnlock(photo.id, e.currentTarget);
+    gallery.appendChild(item);
+  });
+}
+
+// FIX 2: Guard checks + await loadPhotos
+async function handlePhotoAdd(e) {
+  const files = Array.from(e.target.files);
+  const status = $('app-status');
+
+  if (!currentEmailHash ||!masterKeyHex) {
+    alert('Session expired. Please lock and unlock the vault again.');
+    logout(false);
+    e.target.value = '';
+    return;
+  }
+
+  for (let i = 0; i < files.length; i++) {
+    try {
+      if (status) status.textContent = `Encrypting ${i+1}/${files.length}...`;
+      await SecureVault.savePhoto(currentEmailHash, masterKeyHex, files[i]);
+      console.log('Saved photo', i+1, 'for', currentEmailHash);
+    } catch (err) {
+      console.error('Photo error:', err);
+      if (status) {
+        status.className = 'status error';
+        status.textContent = `Failed: ${err.message}`;
+      }
+      e.target.value = '';
+      return;
+    }
+  }
+
+  if (status) {
+    status.className = 'status success';
+    status.textContent = `✅ Added ${files.length} encrypted photos`;
+    setTimeout(() => { status.textContent = ''; status.className = 'status'; }, 3000);
+  }
+
+  await loadPhotos(); // wait for it
+  e.target.value = '';
+}
+
+async function handleImport(e) {
+  const files = Array.from(e.target.files);
+  const status = $('move-status');
+
+  if (!currentEmailHash ||!masterKeyHex) {
+    alert('Session expired. Please lock and unlock the vault again.');
+    logout(false);
+    e.target.value = '';
+    return;
+  }
+
+  for (let i = 0; i < files.length; i++) {
+    try {
+      if (status) status.textContent = `Encrypting ${i+1}/${files.length}...`;
+      await SecureVault.savePhoto(currentEmailHash, masterKeyHex, files[i]);
+    } catch (err) {
+      console.error('Import error:', err);
+      if (status) {
+        status.className = 'status error';
+        status.textContent = `Failed: ${err.message}`;
+      }
+      e.target.value = '';
+      return;
+    }
+  }
+
+  if (status) {
+    status.className = 'status success';
+    status.textContent = `✅ Imported ${files.length} photos to vault`;
+    setTimeout(() => { status.textContent = ''; status.className = 'status'; }, 3000);
+  }
+
+  await loadPhotos();
+  e.target.value = '';
+}
+
+async function requestPhotoUnlock(photoId, thumbElement) {
+  console.log('Requesting unlock for:', photoId);
+  currentPhotoId = photoId;
+
+  // FIX 3: If masterKeyHex is null, force re-auth
+  if (!masterKeyHex) {
+    const emailHash = localStorage.getItem('sv_current_user');
+    if (!emailHash) {
+      alert('Session expired. Please login again.');
+      logout(false);
+      return;
+    }
+    showPasswordModal();
+    return;
+  }
+
+  const tempKey = masterKeyHex;
+  masterKeyHex = null;
+
+  if (unlockMethod === 'password') {
+    showPasswordModal();
+  } else if (unlockMethod === 'biometric') {
+    const result = await SecureVault.getMasterKey(currentEmailHash);
+    if (result.success) {
+      masterKeyHex = result.masterKey;
+      openPhotoViewer(photoId, thumbElement);
+    } else {
+      alert('Biometric authentication failed: ' + result.error);
+      masterKeyHex = tempKey;
+    }
+  } else {
+    masterKeyHex = tempKey;
+    showPasswordModal();
+  }
+}
+
+function showPasswordModal() {
+  const modal = $('password-modal');
+  const pwdInput = $('modal-password');
+  const status = $('modal-status');
+  if (modal) modal.style.display = 'flex';
+  if (pwdInput) {
+    pwdInput.value = '';
+    pwdInput.focus();
+  }
+  if (status) status.textContent = '';
+}
+
+function closeModal() {
+  const modal = $('password-modal');
+  if (modal) modal.style.display = 'none';
+  currentPhotoId = null;
+}
+
+async function submitModalPassword() {
+  const pwd = $('modal-password')?.value;
+  if (!pwd) return;
+
+  const status = $('modal-status');
+  if (status) {
+    status.textContent = 'Verifying...';
+    status.className = 'status';
+  }
+
+  const users = JSON.parse(localStorage.getItem('sv_users') || '{}');
+  const userData = users[currentEmailHash];
+
+  const result = await SecureVault.verifyPassword(pwd, userData);
+
+  if (result.success) {
+    masterKeyHex = result.masterKey;
+    const photoIdToOpen = currentPhotoId;
+    const thumbEl = document.querySelector(`[data-id="${photoIdToOpen}"]`);
+    closeModal();
+    openPhotoViewer(photoIdToOpen, thumbEl);
+  } else {
+    if (status) {
+      status.className = 'status error';
+      status.textContent = 'Wrong password';
+      setTimeout(() => {
+        status.textContent = '';
+        status.className = 'status';
+      }, 3000);
+    }
+  }
+}
+
+async function submitModalFaceID() {
+  const status = $('modal-status');
+  if (status) {
+    status.textContent = 'Use biometric...';
+    status.className = 'status';
+  }
+
+  const result = await SecureVault.getMasterKey(currentEmailHash);
+  if (result.success) {
+    masterKeyHex = result.masterKey;
+    const photoIdToOpen = currentPhotoId;
+    const thumbEl = document.querySelector(`[data-id="${photoIdToOpen}"]`);
+    closeModal();
+    openPhotoViewer(photoIdToOpen, thumbEl);
+  } else {
+    if (status) {
+      status.className = 'status error';
+      status.textContent = 'Biometric failed';
+      setTimeout(() => {
+        status.textContent = '';
+        status.className = 'status';
+      }, 3000);
+    }
+  }
+}
+
+async function openPhotoViewer(photoId, thumbElement) {
+  console.log('Opening viewer for:', photoId, 'User:', currentEmailHash);
+  if (!masterKeyHex) {
+    alert('Error: Authentication required. No master key.');
+    return;
+  }
+
+  const photos = await SecureVault.getAllPhotos(currentEmailHash);
+  const photo = photos.find(p => p.id === photoId);
+
+  if (!photo) {
+    console.error('Photo not found. ID:', photoId, 'Available:', photos.map(p => p.id));
+    alert(`Photo not found.\n\nDebug:\nUser: ${currentEmailHash}\nLooking for: ${photoId}\nAvailable: ${photos.map(p=>p.id).join(', ') || 'none'}`);
+    return;
+  }
+
+  try {
+    console.log('Decrypting photo:', photoId);
+    const decrypted = await SecureVault.decryptBytes(masterKeyHex, photo.encrypted);
+    console.log('Decrypted bytes:', decrypted.byteLength);
+
+    const blob = new Blob([decrypted], { type: 'image/jpeg' });
+    const url = URL.createObjectURL(blob);
+
+    const viewer = $('viewer');
+    if (viewer) {
+      const rect = thumbElement? thumbElement.getBoundingClientRect() : null;
+
+      viewer.innerHTML = `
+        <div id="viewer-backdrop" style="position:fixed;inset:0;background:rgba(0,0,0,0);transition:background 0.3s ease;z-index:9998;"></div>
+        <div id="viewer-img-wrap" style="position:fixed;z-index:9999;transition:all 0.4s cubic-bezier(0.2,0,0,1);">
+          <img src="${url}" id="viewer-img" style="width:100%;height:100%;object-fit:contain;border-radius:8px;box-shadow:0 10px 40px rgba(0,0,0,0.5);">
+          <button onclick="closePhotoModal()" style="position:absolute;top:20px;right:20px;background:rgba(0,0,0,0.6);color:white;border:none;width:40px;height:40px;border-radius:50%;font-size:24px;cursor:pointer;opacity:0;transition:opacity 0.3s ease 0.2s;" id="viewer-close">×</button>
+        </div>
+      `;
+
+      const wrap = $('viewer-img-wrap');
+      const backdrop = $('viewer-backdrop');
+      const closeBtn = $('viewer-close');
+
+      if (rect) {
+        wrap.style.left = rect.left + 'px';
+        wrap.style.top = rect.top + 'px';
+        wrap.style.width = rect.width + 'px';
+        wrap.style.height = rect.height + 'px';
+        wrap.style.borderRadius = '8px';
+      } else {
+        wrap.style.left = '50%';
+        wrap.style.top = '50%';
+        wrap.style.width = '0px';
+        wrap.style.height = '0px';
+        wrap.style.transform = 'translate(-50%, -50%)';
+      }
+
+      viewer.classList.add('active');
+
+      requestAnimationFrame(() => {
+        backdrop.style.background = 'rgba(0,0,0,0.95)';
+        wrap.style.left = '50%';
+        wrap.style.top = '50%';
+        wrap.style.width = '95vw';
+        wrap.style.height = '95vh';
+        wrap.style.transform = 'translate(-50%, -50%)';
+        wrap.style.borderRadius = '0px';
+        closeBtn.style.opacity = '1';
+      });
+
+      VaultTimer.startPhotoTimer();
+      console.log('Viewer activated');
+    }
+  } catch (err) {
+    console.error('Decrypt error:', err);
+    alert('Failed to decrypt photo: ' + err.message);
+  }
+}
+
+function closePhotoModal() {
+  const viewer = $('viewer');
+  const wrap = $('viewer-img-wrap');
+  const backdrop = $('viewer-backdrop');
+
+  if (viewer && wrap) {
+    backdrop.style.background = 'rgba(0,0,0,0)';
+    wrap.style.opacity = '0';
+    wrap.style.transform = 'translate(-50%, -50%) scale(0.8)';
+
+    setTimeout(() => {
+      const img = viewer.querySelector('img');
+      if (img && img.src.startsWith('blob:')) {
+        URL.revokeObjectURL(img.src);
+      }
+      viewer.classList.remove('active');
+      viewer.innerHTML = '';
+    }, 300);
+  }
+  VaultTimer.stopPhotoTimer();
+  currentPhotoId = null;
+}
+
+function showFeedback() {
+  alert('Feedback coming soon! For now, DM @OifogheEmmanuel on X or GitHub.');
+}
+
+// Expose for inline onclick fallback
+window.handleSignup = handleSignup;
+window.handleLogin = handleLogin;
+window.handleFaceID = handleFaceID;
+window.showSignup = showSignup;
+window.showLogin = showLogin;
+window.logout = logout;
+window.switchTab = switchTab;
+window.toggleTheme = toggleTheme;
+window.saveAuthMethod = saveAuthMethod;
+window.toggleSync = toggleSync;
+window.closeModal = closeModal;
+window.submitModalPassword = submitModalPassword;
+window.submitModalFaceID = submitModalFaceID;
+window.closePhotoModal = closePhotoModal;
+window.showFeedback = showFeedback;
+
+} // End window.SP_LOADED check
