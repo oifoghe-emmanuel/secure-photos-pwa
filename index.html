@@ -271,12 +271,11 @@
   <script src="./script.js"></script>
   <script>
 if ('serviceWorker' in navigator) {
+  let refreshing = false;
+  
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js').then(registration => {
       console.log('[SW] Registered:', registration.scope);
-
-      // Check for updates only when banner is clicked, not on every load
-      // registration.update();  <- REMOVED
 
       if (registration.waiting) {
         showUpdateBanner(registration.waiting);
@@ -294,17 +293,18 @@ if ('serviceWorker' in navigator) {
     }).catch(err => console.error('[SW] Registration failed:', err));
   });
 
-  let refreshing = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (refreshing) return;
     refreshing = true;
-    // Small delay so the new SW actually takes control
-    setTimeout(() => window.location.reload(), 200);
+    console.log('[SW] Controller changed, reloading once');
+    window.location.reload();
   });
 }
 
 function showUpdateBanner(worker) {
   const banner = document.getElementById('update-banner');
+  if (!banner) return;
+  
   banner.style.display = 'block';
 
   document.getElementById('update-btn').onclick = () => {
@@ -316,6 +316,6 @@ function showUpdateBanner(worker) {
     banner.style.display = 'none';
   };
 }
-  </script>
-  </body>
+</script>
+</body>
 </html>
