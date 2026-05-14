@@ -12,6 +12,7 @@ let inactivityTimer = null;
 let photoViewTimer = null;
 let currentPhotoId = null;
 let statusTimeout = null;
+let isSavingPhotos = false; // Guard against double saves
 const FUNNY_EMOJIS = ['🤪','🎭','🎪','🎨','🎯','🤡','👾','🦄','🍕','🚀','🎸','🦖','🧸','🎲','🪩','🦜','🎮','🌮'];
 
 const $ = (id) => document.getElementById(id);
@@ -60,9 +61,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // App events
   $('logout-btn')?.addEventListener('click', () => logout(false));
-  $('fab-btn')?.addEventListener('click', () => $('camera')?.click());
+  $('fab-btn')?.addEventListener('click', () => {
+    if (isSavingPhotos) return;
+    $('camera')?.click();
+  });
   $('camera')?.addEventListener('change', handlePhotoAdd);
-  $('move-select-btn')?.addEventListener('click', () => $('move-input')?.click());
+  $('move-select-btn')?.addEventListener('click', () => {
+    if (isSavingPhotos) return;
+    $('move-input')?.click();
+  });
   $('move-input')?.addEventListener('change', handleImport);
 
   // Settings events
@@ -138,7 +145,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const authSelect = $('auth-method');
   if (authSelect) authSelect.value = unlockMethod;
 
-  // FIX 1: Restore session if exists
+  // Restore session if exists
   const savedHash = localStorage.getItem('sv_current_user');
   if (savedHash) {
     currentEmailHash = savedHash;
@@ -229,6 +236,7 @@ function logout(auto = false) {
   masterKeyHex = null;
   currentEmailHash = null;
   currentUsername = '';
+  isSavingPhotos = false;
   $('app-screen')?.classList.remove('active');
   $('auth-screen')?.classList.add('active');
   const pwdInput = $('login-password');
@@ -385,19 +393,18 @@ async function loadPhotos() {
   const gallery = $('gallery');
   if (!gallery) return;
 
+  // Migrate old photos without IDs
   let needsSave = false;
   photos = photos.map(p => {
     if (!p.id && p.encrypted) {
       p.id = p.timestamp? p.timestamp.toString() + Math.random().toString(36).substr(2, 9) : Date.now().toString() + Math.random().toString(36).substr(2, 9);
       needsSave = true;
-      console.log('Migrated old photo, gave it ID:', p.id);
     }
     return p;
   });
 
   if (needsSave) {
     await SecureVault.saveAllPhotos(currentEmailHash, photos);
-    console.log('Saved migrated photos');
   }
 
   if (!photos || photos.length === 0) {
@@ -426,22 +433,35 @@ async function loadPhotos() {
   });
 }
 
-// FIX 2: Guard checks + await loadPhotos
 async function handlePhotoAdd(e) {
+  if (isSavingPhotos) {
+    console.warn('Already saving photos, ignoring');
+    e.target.value = '';
+    return;
+  }
+
   const files = Array.from(e.target.files);
+  if (!files.length) return;
+
   const status = $('app-status');
+  isSavingPhotos = true;
+  $('fab-btn').disabled = true;
 
   if (!currentEmailHash ||!masterKeyHex) {
     alert('Session expired. Please lock and unlock the vault again.');
     logout(false);
     e.target.value = '';
+    isSavingPhotos = false;
+    $('fab-btn').disabled = false;
     return;
   }
 
+  let savedCount = 0;
   for (let i = 0; i < files.length; i++) {
     try {
       if (status) status.textContent = `Encrypting ${i+1}/${files.length}...`;
       await SecureVault.savePhoto(currentEmailHash, masterKeyHex, files[i]);
+      savedCount++;
       console.log('Saved photo', i+1, 'for', currentEmailHash);
     } catch (err) {
       console.error('Photo error:', err);
@@ -449,62 +469,81 @@ async function handlePhotoAdd(e) {
         status.className = 'status error';
         status.textContent = `Failed: ${err.message}`;
       }
-      e.target.value = '';
-      return;
+      break;
     }
   }
 
-  if (status) {
-    status.className = 'status success';
-    status.textContent = `✅ Added ${files.length} encrypted photos`;
-    setTimeout(() => { status.textContent = ''; status.className = 'status'; }, 3000);
+  if (savedCount > 0) {
+    if (status) {
+      status.className = 'status success';
+      status.textContent = `✅ Added ${savedCount} encrypted photos`;
+      setTimeout(() => { status.textContent = ''; status.className = 'status'; }, 3000);
+    }
+    await loadPhotos();
   }
 
-  await loadPhotos(); // wait for it
   e.target.value = '';
+  isSavingPhotos = false;
+  $('fab-btn').disabled = false;
 }
 
 async function handleImport(e) {
+  if (isSavingPhotos) {
+    console.warn('Already saving photos, ignoring');
+    e.target.value = '';
+    return;
+  }
+
   const files = Array.from(e.target.files);
+  if (!files.length) return;
+
   const status = $('move-status');
+  isSavingPhotos = true;
+  $('move-select-btn').disabled = true;
 
   if (!currentEmailHash ||!masterKeyHex) {
     alert('Session expired. Please lock and unlock the vault again.');
     logout(false);
     e.target.value = '';
+    isSavingPhotos = false;
+    $('move-select-btn').disabled = false;
     return;
   }
 
+  let savedCount = 0;
   for (let i = 0; i < files.length; i++) {
     try {
       if (status) status.textContent = `Encrypting ${i+1}/${files.length}...`;
       await SecureVault.savePhoto(currentEmailHash, masterKeyHex, files[i]);
+      savedCount++;
     } catch (err) {
       console.error('Import error:', err);
       if (status) {
         status.className = 'status error';
         status.textContent = `Failed: ${err.message}`;
       }
-      e.target.value = '';
-      return;
+      break;
     }
   }
 
-  if (status) {
-    status.className = 'status success';
-    status.textContent = `✅ Imported ${files.length} photos to vault`;
-    setTimeout(() => { status.textContent = ''; status.className = 'status'; }, 3000);
+  if (savedCount > 0) {
+    if (status) {
+      status.className = 'status success';
+      status.textContent = `✅ Imported ${savedCount} photos to vault`;
+      setTimeout(() => { status.textContent = ''; status.className = 'status'; }, 3000);
+    }
+    await loadPhotos();
   }
 
-  await loadPhotos();
   e.target.value = '';
+  isSavingPhotos = false;
+  $('move-select-btn').disabled = false;
 }
 
 async function requestPhotoUnlock(photoId, thumbElement) {
   console.log('Requesting unlock for:', photoId);
   currentPhotoId = photoId;
 
-  // FIX 3: If masterKeyHex is null, force re-auth
   if (!masterKeyHex) {
     const emailHash = localStorage.getItem('sv_current_user');
     if (!emailHash) {
