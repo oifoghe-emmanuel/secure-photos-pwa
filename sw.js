@@ -1,11 +1,11 @@
-const CACHE_NAME = 'securephoto-v1.3.0'; // BUMP THIS ON EVERY RELEASE
+const CACHE_NAME = 'securephoto-v1.3.0'; 
 const urlsToCache = [
   './',
   './index.html',
-  './style.css?v=1.1.0',
+  './style.css?v=1.3.0',
   './script.js',
   './secure.js',
-  './manifest.json?v=1.1.0',
+  './manifest.json?v=1.3.0',
   './icons/icon-192.png',
   './icons/icon-512.png'
 ];
@@ -14,11 +14,11 @@ const urlsToCache = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      console.log('[SW] Caching app shell v1.1.0');
+      console.log('[SW] Caching app shell', CACHE_NAME);
       return cache.addAll(urlsToCache);
     })
   );
-  self.skipWaiting(); // Activate new SW immediately
+  self.skipWaiting();
 });
 
 // Activate - delete old caches
@@ -35,29 +35,40 @@ self.addEventListener('activate', (event) => {
       );
     })
   );
-  self.clients.claim(); // Take control of all pages
+  self.clients.claim();
 });
 
-// Fetch - Cache first, fallback to network
+// Fetch - Stale-while-revalidate for HTML, cache-first for static
 self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  const url = new URL(req.url);
+
+  // For navigation requests, use network-first to avoid stale HTML
+  if (req.mode === 'navigate') {
+    event.respondWith(
+      fetch(req)
+        .then(res => {
+          const resClone = res.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(req, resClone));
+          return res;
+        })
+        .catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
+
+  // For everything else, cache-first
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
+    caches.match(req).then(cachedResponse => {
       if (cachedResponse) return cachedResponse;
       
-      return fetch(event.request).then((networkResponse) => {
-        if (event.request.method === 'GET') {
+      return fetch(req).then(networkResponse => {
+        if (req.method === 'GET' && networkResponse.ok) {
           const responseClone = networkResponse.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseClone);
-          });
+          caches.open(CACHE_NAME).then(cache => cache.put(req, responseClone));
         }
         return networkResponse;
       });
-    }).catch(() => {
-      // Offline fallback for navigation
-      if (event.request.mode === 'navigate') {
-        return caches.match('./index.html');
-      }
     })
   );
 });
