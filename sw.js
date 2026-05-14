@@ -2,10 +2,10 @@ const CACHE_NAME = 'securephoto-v1.4.0';
 const urlsToCache = [
   './',
   './index.html',
-  './style.css?v=1.3.0',
+  './style.css?v=1.4.0',
   './script.js',
   './secure.js',
-  './manifest.json?v=1.3.0',
+  './manifest.json?v=1.4.0',
   './icons/icon-192.png',
   './icons/icon-512.png'
 ];
