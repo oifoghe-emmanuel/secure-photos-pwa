@@ -12,7 +12,7 @@ let inactivityTimer = null;
 let photoViewTimer = null;
 let currentPhotoId = null;
 let statusTimeout = null;
-let isSavingPhotos = false; // Guard against double saves
+let isSavingPhotos = false;
 const FUNNY_EMOJIS = ['🤪','🎭','🎪','🎨','🎯','🤡','👾','🦄','🍕','🚀','🎸','🦖','🧸','🎲','🪩','🦜','🎮','🌮'];
 
 const $ = (id) => document.getElementById(id);
@@ -210,7 +210,7 @@ function showAuthStatus(msg, type = '') {
     el.textContent = msg;
     el.className = 'status ' + (type && type!== 'info'? type : '');
 
-    if (type === 'error') {
+    if (type === 'error' || type === 'success') {
       statusTimeout = setTimeout(() => {
         el.textContent = '';
         el.className = 'status';
@@ -224,11 +224,16 @@ function clearStatus() {
   showAuthStatus('');
 }
 
-function showApp() {
+function showApp(welcomeMsg = '') {
   $('auth-screen')?.classList.remove('active');
   $('app-screen')?.classList.add('active');
   const headerUser = $('header-username');
   if (headerUser) headerUser.textContent = '@' + currentUsername;
+
+  if (welcomeMsg) {
+    showAuthStatus(welcomeMsg, 'success');
+  }
+
   loadPhotos();
 }
 
@@ -288,11 +293,10 @@ async function handleSignup() {
     const bioResult = await SecureVault.saveMasterKey(currentEmailHash, masterKeyHex);
 
     if (bioResult.secure) {
-      showAuthStatus('✅ Account created with biometric security!', 'success');
+      showApp('✅ Account created with biometric security!');
     } else {
-      showAuthStatus('✅ Account created! Biometric unavailable.', 'success');
+      showApp('✅ Account created! Biometric unavailable.');
     }
-    setTimeout(showApp, 1000);
   } catch (err) {
     showAuthStatus('Signup failed: ' + err.message, 'error');
   } finally {
@@ -320,7 +324,7 @@ async function handleLogin() {
     currentEmailHash = result.emailHash;
     currentUsername = result.username;
     console.log('Logged in as:', currentEmailHash);
-    setTimeout(showApp, 500);
+    setTimeout(() => showApp(), 500);
   } catch (err) {
     const msg = err.message.replace('Login: ', '');
     showAuthStatus(msg.includes('Email not found')? 'Email not found' : msg, 'error');
@@ -350,7 +354,7 @@ async function handleFaceID() {
       const usernameCt = encUsername.slice(12);
       const decUsername = await crypto.subtle.decrypt({ name: "AES-GCM", iv: usernameIv }, userKey, usernameCt);
       currentUsername = new TextDecoder().decode(decUsername);
-      setTimeout(showApp, 500);
+      setTimeout(() => showApp(), 500);
     } else {
       throw new Error(result.error);
     }
@@ -459,7 +463,10 @@ async function handlePhotoAdd(e) {
   let savedCount = 0;
   for (let i = 0; i < files.length; i++) {
     try {
-      if (status) status.textContent = `Encrypting ${i+1}/${files.length}...`;
+      if (status) {
+        status.className = 'status';
+        status.textContent = `Encrypting ${i+1}/${files.length}...`;
+      }
       await SecureVault.savePhoto(currentEmailHash, masterKeyHex, files[i]);
       savedCount++;
       console.log('Saved photo', i+1, 'for', currentEmailHash);
@@ -476,8 +483,11 @@ async function handlePhotoAdd(e) {
   if (savedCount > 0) {
     if (status) {
       status.className = 'status success';
-      status.textContent = `✅ Added ${savedCount} encrypted photos`;
-      setTimeout(() => { status.textContent = ''; status.className = 'status'; }, 3000);
+      status.textContent = `✅ Added ${savedCount} encrypted photo${savedCount > 1? 's' : ''}`;
+      setTimeout(() => {
+        status.textContent = '';
+        status.className = 'status';
+      }, 3000);
     }
     await loadPhotos();
   }
@@ -513,7 +523,10 @@ async function handleImport(e) {
   let savedCount = 0;
   for (let i = 0; i < files.length; i++) {
     try {
-      if (status) status.textContent = `Encrypting ${i+1}/${files.length}...`;
+      if (status) {
+        status.className = 'status';
+        status.textContent = `Encrypting ${i+1}/${files.length}...`;
+      }
       await SecureVault.savePhoto(currentEmailHash, masterKeyHex, files[i]);
       savedCount++;
     } catch (err) {
@@ -530,7 +543,10 @@ async function handleImport(e) {
     if (status) {
       status.className = 'status success';
       status.textContent = `✅ Imported ${savedCount} photos to vault`;
-      setTimeout(() => { status.textContent = ''; status.className = 'status'; }, 3000);
+      setTimeout(() => {
+        status.textContent = '';
+        status.className = 'status';
+      }, 3000);
     }
     await loadPhotos();
   }
