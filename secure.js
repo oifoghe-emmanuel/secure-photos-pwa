@@ -89,7 +89,7 @@ window.SecureVault = (function () {
               userVerification: "required",
               residentKey: "required"
             },
-            extensions: { prf: { eval: { first: prfSalt } // FIXED: closed brace
+            extensions: { prf: { eval: { first: prfSalt } }}
           }
         });
 
@@ -135,7 +135,7 @@ window.SecureVault = (function () {
               challenge,
               allowCredentials: [{ type: "public-key", id: B(credId) }],
               userVerification: "required",
-              extensions: { prf: { eval: { first: B(prfSalt) } // FIXED: closed brace
+              extensions: { prf: { eval: { first: B(prfSalt) } } }
             }
           });
 
