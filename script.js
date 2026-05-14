@@ -20,6 +20,35 @@ const show = (el) => el && (el.style.display = 'block');
 const hide = (el) => el && (el.style.display = 'none');
 const B = h => new Uint8Array(h.match(/.{1,2}/g).map(b=>parseInt(b,16)));
 
+function setUIBusy(busy) {
+  isSavingPhotos = busy;
+
+  document.querySelectorAll('button,.nav-item, input[type="file"]').forEach(el => {
+    el.disabled = busy;
+    if (busy) el.style.pointerEvents = 'none';
+    else el.style.pointerEvents = '';
+  });
+
+  let overlay = $('busy-overlay');
+  if (!overlay && busy) {
+    overlay = document.createElement('div');
+    overlay.id = 'busy-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.3);z-index:9990;cursor:not-allowed;';
+    document.body.appendChild(overlay);
+  }
+  if (overlay) overlay.style.display = busy? 'block' : 'none';
+
+ 
+  if (busy) {
+    setTimeout(() => {
+      if (isSavingPhotos) {
+        console.warn('Force unlocking UI after timeout');
+        setUIBusy(false);
+      }
+    }, 8000);
+  }
+}
+
 const VaultTimer = {
   reset() {
     clearTimeout(inactivityTimer);
@@ -49,6 +78,24 @@ function toggleTheme() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   initTheme();
+
+  // Migrate from localStorage to IndexedDB on first run
+  async function migrateStorage() {
+    const keys = Object.keys(localStorage);
+    const photoKeys = keys.filter(k => k.startsWith('sv_photos_'));
+
+    if (photoKeys.length === 0) return;
+
+    //console.log('Migrating', photoKeys.length, 'photo sets to IndexedDB...');
+    for (const key of photoKeys) {
+      const data = localStorage.getItem(key);
+      // Access StorageAdapter from SecureVault scope
+      await SecureVault._storage.set(key, data);
+      localStorage.removeItem(key);
+    }
+    //console.log('Migration done');
+  }
+  await migrateStorage();
 
   // Auth events
   $('signup-btn')?.addEventListener('click', handleSignup);
@@ -84,7 +131,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Navigation
   document.querySelectorAll('.nav-item').forEach(btn => {
-    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    btn.addEventListener('click', () => {
+      if (isSavingPhotos) return;
+      switchTab(btn.dataset.tab);
+    });
   });
 
   // Dropdowns
@@ -94,12 +144,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   const aboutDropdown = $('about-dropdown');
 
   contactItem?.addEventListener('click', (e) => {
+    if (isSavingPhotos) return;
     e.stopPropagation();
     contactDropdown.style.display = contactDropdown.style.display === 'block'? 'none' : 'block';
     aboutDropdown.style.display = 'none';
   });
 
   aboutItem?.addEventListener('click', (e) => {
+    if (isSavingPhotos) return;
     e.stopPropagation();
     aboutDropdown.style.display = aboutDropdown.style.display === 'block'? 'none' : 'block';
     contactDropdown.style.display = 'none';
@@ -115,6 +167,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   $('feedback-link')?.addEventListener('click', (e) => {
+    if (isSavingPhotos) return;
     e.preventDefault();
     showFeedback();
   });
@@ -149,7 +202,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const savedHash = localStorage.getItem('sv_current_user');
   if (savedHash) {
     currentEmailHash = savedHash;
-    console.log('Restored emailHash:', currentEmailHash);
+    //console.log('Restored emailHash:', currentEmailHash);
     showLogin();
   } else {
     showSignup();
@@ -241,7 +294,7 @@ function logout(auto = false) {
   masterKeyHex = null;
   currentEmailHash = null;
   currentUsername = '';
-  isSavingPhotos = false;
+  setUIBusy(false);
   $('app-screen')?.classList.remove('active');
   $('auth-screen')?.classList.add('active');
   const pwdInput = $('login-password');
@@ -323,7 +376,7 @@ async function handleLogin() {
     masterKeyHex = result.masterKey;
     currentEmailHash = result.emailHash;
     currentUsername = result.username;
-    console.log('Logged in as:', currentEmailHash);
+    //console.log('Logged in as:', currentEmailHash);
     setTimeout(() => showApp(), 500);
   } catch (err) {
     const msg = err.message.replace('Login: ', '');
@@ -386,14 +439,14 @@ function switchTab(tabName) {
 }
 
 async function loadPhotos() {
-  console.log('Loading photos for user:', currentEmailHash);
+  //console.log('Loading photos for user:', currentEmailHash);
   if (!currentEmailHash) {
     console.warn('No emailHash, skipping loadPhotos');
     return;
   }
 
   let photos = await SecureVault.getAllPhotos(currentEmailHash);
-  console.log('Found photos:', photos.length);
+  //console.log('Found photos:', photos.length);
   const gallery = $('gallery');
   if (!gallery) return;
 
@@ -432,14 +485,16 @@ async function loadPhotos() {
     item.dataset.id = photo.id;
     const emoji = FUNNY_EMOJIS[Math.floor(Math.random() * FUNNY_EMOJIS.length)];
     item.innerHTML = `<div style="font-size:48px">${emoji}</div>`;
-    item.onclick = (e) => requestPhotoUnlock(photo.id, e.currentTarget);
+    item.onclick = (e) => {
+      if (isSavingPhotos) return;
+      requestPhotoUnlock(photo.id, e.currentTarget);
+    };
     gallery.appendChild(item);
   });
 }
 
 async function handlePhotoAdd(e) {
   if (isSavingPhotos) {
-    console.warn('Already saving photos, ignoring');
     e.target.value = '';
     return;
   }
@@ -448,15 +503,13 @@ async function handlePhotoAdd(e) {
   if (!files.length) return;
 
   const status = $('app-status');
-  isSavingPhotos = true;
-  $('fab-btn').disabled = true;
+  setUIBusy(true);
 
   if (!currentEmailHash ||!masterKeyHex) {
     alert('Session expired. Please lock and unlock the vault again.');
     logout(false);
     e.target.value = '';
-    isSavingPhotos = false;
-    $('fab-btn').disabled = false;
+    setUIBusy(false);
     return;
   }
 
@@ -467,9 +520,23 @@ async function handlePhotoAdd(e) {
         status.className = 'status';
         status.textContent = `Encrypting ${i+1}/${files.length}...`;
       }
-      await SecureVault.savePhoto(currentEmailHash, masterKeyHex, files[i]);
-      savedCount++;
-      console.log('Saved photo', i+1, 'for', currentEmailHash);
+
+      // Check for duplicate
+      const existing = await SecureVault.getAllPhotos(currentEmailHash);
+      const isDup = existing.some(p =>
+        Math.abs(p.timestamp - files[i].lastModified) < 2000 &&
+        p.size === files[i].size
+      );
+
+      if (!isDup) {
+        const result = await SecureVault.savePhoto(currentEmailHash, masterKeyHex, files[i]);
+        if (result.success) {
+          savedCount++;
+          //console.log('Saved photo', i+1, 'for', currentEmailHash);
+        }
+      } else {
+        //console.log('Skipped duplicate photo', i+1);
+      }
     } catch (err) {
       console.error('Photo error:', err);
       if (status) {
@@ -481,25 +548,30 @@ async function handlePhotoAdd(e) {
   }
 
   if (savedCount > 0) {
-    if (status) {
-      status.className = 'status success';
-      status.textContent = `✅ Added ${savedCount} encrypted photo${savedCount > 1? 's' : ''}`;
-      setTimeout(() => {
-        status.textContent = '';
-        status.className = 'status';
-      }, 3000);
-    }
-    await loadPhotos();
+  if (status) {
+    status.className = 'status success';
+    status.textContent = `✅ Imported ${savedCount} photos. Please delete the originals from your gallery.`;
+    setTimeout(() => {
+      status.textContent = '';
+      status.className = 'status';
+    }, 4000);
+  }
+  await loadPhotos();
+} else if (status && files.length > 0) {
+    status.className = 'status info';
+    status.textContent = 'No new photos - duplicates skipped';
+    setTimeout(() => {
+      status.textContent = '';
+      status.className = 'status';
+    }, 2000);
   }
 
   e.target.value = '';
-  isSavingPhotos = false;
-  $('fab-btn').disabled = false;
+  setUIBusy(false);
 }
 
 async function handleImport(e) {
   if (isSavingPhotos) {
-    console.warn('Already saving photos, ignoring');
     e.target.value = '';
     return;
   }
@@ -508,15 +580,13 @@ async function handleImport(e) {
   if (!files.length) return;
 
   const status = $('move-status');
-  isSavingPhotos = true;
-  $('move-select-btn').disabled = true;
+  setUIBusy(true);
 
   if (!currentEmailHash ||!masterKeyHex) {
     alert('Session expired. Please lock and unlock the vault again.');
     logout(false);
     e.target.value = '';
-    isSavingPhotos = false;
-    $('move-select-btn').disabled = false;
+    setUIBusy(false);
     return;
   }
 
@@ -527,8 +597,19 @@ async function handleImport(e) {
         status.className = 'status';
         status.textContent = `Encrypting ${i+1}/${files.length}...`;
       }
-      await SecureVault.savePhoto(currentEmailHash, masterKeyHex, files[i]);
-      savedCount++;
+
+      const existing = await SecureVault.getAllPhotos(currentEmailHash);
+      const isDup = existing.some(p =>
+        Math.abs(p.timestamp - files[i].lastModified) < 2000 &&
+        p.size === files[i].size
+      );
+
+      if (!isDup) {
+        const result = await SecureVault.savePhoto(currentEmailHash, masterKeyHex, files[i]);
+        if (result.success) {
+          savedCount++;
+        }
+      }
     } catch (err) {
       console.error('Import error:', err);
       if (status) {
@@ -552,12 +633,11 @@ async function handleImport(e) {
   }
 
   e.target.value = '';
-  isSavingPhotos = false;
-  $('move-select-btn').disabled = false;
+  setUIBusy(false);
 }
 
 async function requestPhotoUnlock(photoId, thumbElement) {
-  console.log('Requesting unlock for:', photoId);
+ // console.log('Requesting unlock for:', photoId);
   currentPhotoId = photoId;
 
   if (!masterKeyHex) {
@@ -669,7 +749,7 @@ async function submitModalFaceID() {
 }
 
 async function openPhotoViewer(photoId, thumbElement) {
-  console.log('Opening viewer for:', photoId, 'User:', currentEmailHash);
+  //console.log('Opening viewer for:', photoId, 'User:', currentEmailHash);
   if (!masterKeyHex) {
     alert('Error: Authentication required. No master key.');
     return;
@@ -685,9 +765,9 @@ async function openPhotoViewer(photoId, thumbElement) {
   }
 
   try {
-    console.log('Decrypting photo:', photoId);
+    //console.log('Decrypting photo:', photoId);
     const decrypted = await SecureVault.decryptBytes(masterKeyHex, photo.encrypted);
-    console.log('Decrypted bytes:', decrypted.byteLength);
+    //console.log('Decrypted bytes:', decrypted.byteLength);
 
     const blob = new Blob([decrypted], { type: 'image/jpeg' });
     const url = URL.createObjectURL(blob);
@@ -736,7 +816,7 @@ async function openPhotoViewer(photoId, thumbElement) {
       });
 
       VaultTimer.startPhotoTimer();
-      console.log('Viewer activated');
+      //console.log('Viewer activated');
     }
   } catch (err) {
     console.error('Decrypt error:', err);
