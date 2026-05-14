@@ -1,4 +1,4 @@
-// === SECURE-VAULT.JS V9.1.0 - GRACEFUL BIOMETRIC FALLBACK ===
+// === SECURE-VAULT.JS V9.1.1 - FIXED PHOTO PERSISTENCE ===
 if (window.SecureVault) {
   console.warn('SecureVault already loaded');
 } else {
@@ -89,7 +89,7 @@ window.SecureVault = (function () {
               userVerification: "required",
               residentKey: "required"
             },
-            extensions: { prf: { eval: { first: prfSalt } } }
+            extensions: { prf: { eval: { first: prfSalt } }
           }
         });
 
@@ -135,7 +135,7 @@ window.SecureVault = (function () {
               challenge,
               allowCredentials: [{ type: "public-key", id: B(credId) }],
               userVerification: "required",
-              extensions: { prf: { eval: { first: B(prfSalt) } } }
+              extensions: { prf: { eval: { first: B(prfSalt) } }
             }
           });
 
@@ -281,11 +281,20 @@ window.SecureVault = (function () {
     return await deriveMasterKey(password, userData);
   }
 
+  // FIXED: Properly appends photo without overwriting
   async function savePhoto(emailHash, masterKeyHex, file) {
     try {
-      const photoId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
-      const arrayBuffer = await file.arrayBuffer();
+      // 1. Load existing photos - always array
+      const existing = await getAllPhotos(emailHash);
 
+      // 2. Generate unique ID
+      let photoId;
+      do {
+        photoId = crypto.randomUUID? crypto.randomUUID() : Date.now().toString() + Math.random().toString(36).substr(2, 9);
+      } while (existing.some(p => p.id === photoId));
+
+      // 3. Encrypt file
+      const arrayBuffer = await file.arrayBuffer();
       const key = await crypto.subtle.importKey("raw", B(masterKeyHex), "AES-GCM", false, ["encrypt"]);
       const iv = crypto.getRandomValues(new Uint8Array(12));
       const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, arrayBuffer);
@@ -297,19 +306,27 @@ window.SecureVault = (function () {
         timestamp: Date.now()
       };
 
-      const existing = await getAllPhotos(emailHash);
+      // 4. Append and save
       existing.push(photoData);
       await StorageAdapter.set(`sv_photos_${emailHash}`, JSON.stringify(existing));
 
       return { success: true, photoId };
     } catch (e) {
+      console.error('savePhoto error:', e);
       return { success: false, error: e.message };
     }
   }
 
   async function getAllPhotos(emailHash) {
-    const raw = await StorageAdapter.get(`sv_photos_${emailHash}`);
-    return raw? JSON.parse(raw) : [];
+    try {
+      const raw = await StorageAdapter.get(`sv_photos_${emailHash}`);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed)? parsed : [];
+    } catch (e) {
+      console.error('getAllPhotos error:', e);
+      return [];
+    }
   }
 
   async function saveAllPhotos(emailHash, photosArray) {
@@ -346,4 +363,4 @@ window.SecureVault = (function () {
     isBiometricAvailable
   };
 })();
-                                    }
+}
