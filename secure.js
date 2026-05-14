@@ -1,4 +1,4 @@
-// === SECURE-VAULT.JS V9.1.2 - FIXED SYNTAX ERRORS ===
+// === SECURE-VAULT.JS V9.2.0 - IndexedDB + Fixed Syntax ===
 if (window.SecureVault) {
   console.warn('SecureVault already loaded');
 } else {
@@ -30,6 +30,14 @@ window.SecureVault = (function () {
       }
     });
     console.log(`WIPED ${count} VAULT KEYS`);
+
+    // Also clear IndexedDB
+    const db = await StorageAdapter.init();
+    await new Promise(resolve => {
+      const tx = db.transaction('photos', 'readwrite');
+      tx.objectStore('photos').clear();
+      tx.oncomplete = resolve;
+    });
     return count;
   }
 
@@ -46,9 +54,54 @@ window.SecureVault = (function () {
   }
 
   let StorageAdapter = {
-    get: async (key) => localStorage.getItem(key),
-    set: async (key, val) => localStorage.setItem(key, val),
-    remove: async (key) => localStorage.removeItem(key)
+    db: null,
+
+    async init() {
+      if (this.db) return this.db;
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open('SecureVaultDB', 1);
+        req.onupgradeneeded = e => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains('photos')) {
+            db.createObjectStore('photos');
+          }
+        };
+        req.onsuccess = e => {
+          this.db = e.target.result;
+          resolve(this.db);
+        };
+        req.onerror = e => reject(e);
+      });
+    },
+
+    async get(key) {
+      await this.init();
+      return new Promise((resolve) => {
+        const tx = this.db.transaction('photos', 'readonly');
+        const req = tx.objectStore('photos').get(key);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => resolve(null);
+      });
+    },
+
+    async set(key, val) {
+      await this.init();
+      return new Promise((resolve, reject) => {
+        const tx = this.db.transaction('photos', 'readwrite');
+        tx.objectStore('photos').put(val, key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = e => reject(e);
+      });
+    },
+
+    async remove(key) {
+      await this.init();
+      return new Promise((resolve) => {
+        const tx = this.db.transaction('photos', 'readwrite');
+        tx.objectStore('photos').delete(key);
+        tx.oncomplete = () => resolve();
+      });
+    }
   };
 
   const SecureStore = {
@@ -89,9 +142,9 @@ window.SecureVault = (function () {
               userVerification: "required",
               residentKey: "required"
             },
-            extensions: { prf: { eval: { first: prfSalt } }}
+            extensions: { prf: { eval: { first: prfSalt } }
           }
-        });
+        }});
 
         const extResults = cred.getClientExtensionResults();
         const prfSecret = extResults.prf?.results?.first;
@@ -135,9 +188,9 @@ window.SecureVault = (function () {
               challenge,
               allowCredentials: [{ type: "public-key", id: B(credId) }],
               userVerification: "required",
-              extensions: { prf: { eval: { first: B(prfSalt) } } }
+              extensions: { prf: { eval: { first: B(prfSalt) } }
             }
-          });
+          }});
 
           const extResults = assertion.getClientExtensionResults();
           const prfSecret = extResults.prf?.results?.first;
@@ -283,6 +336,12 @@ window.SecureVault = (function () {
 
   async function savePhoto(emailHash, masterKeyHex, file) {
     try {
+      const lockKey = `sv_lock_${emailHash}`;
+      while (localStorage.getItem(lockKey)) {
+        await new Promise(r => setTimeout(r, 50));
+      }
+      localStorage.setItem(lockKey, '1');
+
       const existing = await getAllPhotos(emailHash);
 
       let photoId;
@@ -299,14 +358,17 @@ window.SecureVault = (function () {
       const photoData = {
         id: photoId,
         encrypted: H(combined),
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        size: file.size
       };
 
       existing.push(photoData);
       await StorageAdapter.set(`sv_photos_${emailHash}`, JSON.stringify(existing));
 
+      localStorage.removeItem(lockKey);
       return { success: true, photoId };
     } catch (e) {
+      localStorage.removeItem(`sv_lock_${emailHash}`);
       console.error('savePhoto error:', e);
       return { success: false, error: e.message };
     }
@@ -358,4 +420,4 @@ window.SecureVault = (function () {
     isBiometricAvailable
   };
 })();
-}
+    }
